@@ -11,6 +11,8 @@
  *
  */
 
+#include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/dma-buf.h>
 #include <linux/export.h>
 #include <linux/iommu.h>
@@ -369,6 +371,39 @@ static void msm_iommu_meta_put(struct msm_iommu_meta *meta)
 }
 
 
+/*
+ * One page of guard IOVA after every buffer mapped through ion_map_iommu().
+ *
+ * Enabling any VFE stats engine faults the camera IOMMU at a fixed address --
+ * the first unmapped page past the top of the whole stats region, e.g. FAR
+ * 0x8e000 when the last stats buffer is 0x8a000+0x4000.  A translation fault
+ * stalls the context, so every further VFE AXI write dies and the preview
+ * freezes.  That is why the ISP driver's no_stats defaults to 1, and the cost
+ * is not only 3A: with no stats events mm-qcamera-daemon produces no HAL1
+ * metadata buffers, so the capture superbuf never matches on all of its
+ * streams and a still capture can never complete.
+ *
+ * ion_map_iommu() already has the mechanism for this.  When iova_length
+ * exceeds the buffer size, msm_iommu_map_iommu() reserves the longer range
+ * through msm_allocate_iova_address() and maps the difference with
+ * msm_iommu_map_extra() -- so the padding is allocator-visible and cannot
+ * collide with a later allocation.  Every caller passes 0, meaning "just the
+ * buffer", so the padding is added here instead.
+ *
+ * Mapping guard pages directly with iommu_map() from the camera driver does
+ * NOT work and was tried first: the ION IOVA allocator knows nothing about
+ * such a mapping, later handed the same address to a stats buffer, and the
+ * partially mapped buffer simply moved the fault (0x8e000 -> 0x31000).
+ *
+ * pad_pages = 0 turns this off.  pad_domain restricts it to one domain
+ * number; -1, the default, pads every domain, which is what makes it work
+ * without having to know the camera's domain number in advance.
+ */
+static int talkman_pad_pages = 1;
+module_param_named(pad_pages, talkman_pad_pages, int, 0644);
+static int talkman_pad_domain = -1;
+module_param_named(pad_domain, talkman_pad_domain, int, 0644);
+
 static int __msm_map_iommu_common(
 			struct dma_buf *dma_buf, struct sg_table *table,
 			int domain_num, int partition_num, unsigned long align,
@@ -400,6 +435,12 @@ static int __msm_map_iommu_common(
 	 */
 	if (!iova_length)
 		iova_length = size;
+
+	/* guard page: see the comment above talkman_pad_pages */
+	if (talkman_pad_pages > 0 && iova_length == size &&
+	    (talkman_pad_domain < 0 || domain_num == talkman_pad_domain))
+		iova_length = size + (unsigned long)talkman_pad_pages
+					* PAGE_SIZE;
 
 	if (size > iova_length) {
 		pr_debug("%s: iova length %lx is not at least buffer size %lx\n",
