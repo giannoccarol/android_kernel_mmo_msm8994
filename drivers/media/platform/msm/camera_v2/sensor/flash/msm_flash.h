@@ -95,6 +95,25 @@ struct msm_flash_ctrl_t {
 
 	/* flash state */
 	enum msm_camera_flash_state_t flash_state;
+
+	/*
+	 * A self-describing I2C flash: slave address and register sequences
+	 * read from the device tree, indexed by msm_flash_cfg_type_t.
+	 *
+	 * The userspace flash library only reaches this driver through the
+	 * camera daemon.  The torch does not go that way -- QCameraFlash in
+	 * the HAL opens this subdev directly and sends a current with
+	 * cfg.settings NULL, which is all a PMIC flash needs and nothing an
+	 * I2C part can use.  These let the board describe the part instead,
+	 * so the driver stays generic and no chip is named in this file.
+	 */
+	uint32_t dt_slave_addr;
+	struct msm_camera_i2c_reg_setting_array dt_setting[CFG_FLASH_HIGH + 1];
+	uint8_t dt_setting_valid[CFG_FLASH_HIGH + 1];
+	/* CCI was brought up here rather than by a power sequence */
+	uint8_t dt_cci_inited;
+	/* msm_camera_power_up() really ran, so power_down() may undo it */
+	uint8_t dt_powered_up;
 };
 
 int msm_flash_i2c_probe(struct i2c_client *client,

@@ -1,18 +1,12 @@
 /*
- * A simple LED controlled by the LED_GPIO base driver.
- * According to the schematic, the main pin is located on processor under the GPIO_12 pin.
+ * GPIO 12 -- the flash pin from the schematic -- used to carry a `gpio-leds`
+ * node here, exported as `led::flash_torch`.  It toggles the pin correctly
+ * and lights nothing: the LEDs are driven by the "Hill" three-channel flash
+ * IC on CCI master 0, and nothing emits until that part is configured over
+ * I2C.  The pin now belongs to the flash driver
+ * (`qcom,led-flash@60` in msm8992-talkman-camera.dtsi), which is the only
+ * thing that knows what to do with it, and the working flashlight is
+ * /sys/class/leds/flash-torch.
  *
+ * Left as an empty include so the chi.dtsi include list does not change.
  */
-
-/ {
-    leds {
-        compatible = "gpio-leds";
-        flashlight {
-            label = "led::flash_torch";
-            gpios = <&msm_gpio 12 0>;
-            default-state = "off";
-            linux,default-trigger = "none";
-            retain-state-suspended;
-        };
-    };
-};
