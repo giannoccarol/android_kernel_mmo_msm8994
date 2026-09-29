@@ -439,15 +439,27 @@ static int persistent_ram_post_init(struct persistent_ram_zone *prz, u32 sig,
 				" size %zu, start %zu\n",
 			       buffer_size(prz), buffer_start(prz));
 		else {
-			pr_debug("persistent_ram: found existing buffer,"
+			/*
+			 * Promoted from pr_debug: this pair is the only thing
+			 * that says whether the RAM actually survived the
+			 * reset.  With both at debug level an empty
+			 * /sys/fs/pstore is indistinguishable between "the
+			 * region is never written", "the bootloader clears
+			 * it" and "something else owns it" -- and the printed
+			 * signature tells those apart (0x00000000 = zeroed,
+			 * anything else = overwritten).
+			 */
+			pr_info("persistent_ram: found existing buffer at 0x%llx,"
 				" size %zu, start %zu\n",
+			       (unsigned long long)prz->paddr,
 			       buffer_size(prz), buffer_start(prz));
 			persistent_ram_save_old(prz);
 			return 0;
 		}
 	} else {
-		pr_debug("persistent_ram: no valid data in buffer"
-			" (sig = 0x%08x)\n", prz->buffer->sig);
+		pr_info("persistent_ram: no valid data at 0x%llx"
+			" (sig = 0x%08x, want 0x%08x)\n",
+			(unsigned long long)prz->paddr, prz->buffer->sig, sig);
 	}
 
 	prz->buffer->sig = sig;

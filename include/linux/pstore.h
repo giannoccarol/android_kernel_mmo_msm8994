@@ -44,6 +44,16 @@ struct module;
 struct pstore_info {
 	struct module	*owner;
 	char		*name;
+	/*
+	 * Set by the backend when it actually has somewhere to put
+	 * PSTORE_TYPE_PMSG records.  pstore_register() only creates
+	 * /dev/pmsg0 when this is true: write_pmsg() takes a vmalloc bounce
+	 * buffer per write before it ever consults the backend, so an
+	 * unbacked /dev/pmsg0 is not free -- liblog writes every log line in
+	 * every process to it and the vmap churn showed up as ~19% of all
+	 * CPU cycles on this device.  See camera-lab/live-csi-plan.md S144.
+	 */
+	bool		has_pmsg;
 	spinlock_t	buf_lock;	/* serialize access to 'buf' */
 	char		*buf;
 	size_t		bufsize;

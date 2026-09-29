@@ -514,6 +514,19 @@ static int ramoops_probe(struct platform_device *pdev)
 	if (pdev->dev.of_node)
 		ramoops_of_init(pdev);
 
+	/*
+	 * Say what we got.  Every failure path below this point prints, but
+	 * for a long time this driver produced *no* dmesg line at all on this
+	 * port -- no "attached", no error -- while /sys/fs/pstore stayed empty
+	 * and no backend registered.  One line at entry separates "probe never
+	 * ran" from "probe ran and rejected the parameters".
+	 */
+	pr_info("probe %s: mem 0x%lx@0x%llx console 0x%zx record 0x%zx ftrace 0x%zx pmsg 0x%zx\n",
+		pdev->dev.of_node ? "(dt)" : "(pdata)",
+		pdata->mem_size, (unsigned long long)pdata->mem_address,
+		pdata->console_size, pdata->record_size,
+		pdata->ftrace_size, pdata->pmsg_size);
+
 	/* Only a single ramoops area allowed at a time, so fail extra
 	 * probes.
 	 */
@@ -569,6 +582,8 @@ static int ramoops_probe(struct platform_device *pdev)
 		goto fail_init_mprz;
 
 	cxt->pstore.data = cxt;
+	/* Only offer /dev/pmsg0 if there is a zone behind it (see pstore.h). */
+	cxt->pstore.has_pmsg = (cxt->mprz != NULL);
 	/*
 	 * Console can handle any buffer size, so prefer LOG_LINE_MAX. If we
 	 * have to handle dumps, we must have at least record_size buffer. And

@@ -15,17 +15,49 @@
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
-#include <linux/vmalloc.h>
+#include <linux/slab.h>
 #include "internal.h"
 
 static DEFINE_MUTEX(pmsg_lock);
 #define PMSG_MAX_BOUNCE_BUFFER_SIZE (2*PAGE_SIZE)
 
+/*
+ * ⚠ The bounce buffer is allocated ONCE, not per write.
+ *
+ * This used to be a vmalloc()/vfree() pair inside write_pmsg().  /dev/pmsg0 is
+ * liblog's second transport -- every log line in every process is written here
+ * as well as to logd -- and a typical line is ~100 bytes, so each one took a
+ * whole vmalloc: alloc_vmap_area, an rbtree insert, page-table setup, TLB and
+ * cache maintenance, then __purge_vmap_area_lazy on the way out.  Profiled on
+ * this device during a 4K30 recording (simpleperf, whole system):
+ *
+ *     write_pmsg         22.77% of ALL cpu cycles (inclusive)
+ *     compat_sys_writev  28.27%
+ *
+ * with the vmap churn and its DMA cache maintenance the top kernel symbols on
+ * the entire machine.  Removing it took sustained 4K recording from ~20 fps to
+ * 29.6 fps at the same junction temperature.  See camera-lab/live-csi-plan.md
+ * S144 and S146.
+ *
+ * pmsg_lock already serialises the whole copy loop, so one shared buffer is
+ * safe.  It is kmalloc'd (8 KB, order-1) at registration.
+ *
+ * Upstream solved the same problem differently -- it deleted the bounce buffer
+ * altogether by adding a ->write_buf_user callback that __copy_from_user()s
+ * straight into the persistent-ram zone.  That is the better fix in principle,
+ * but this zone is mapped by persistent_ram_iomap() with ioremap_wc() (the
+ * region is linux,remove-completely, so pfn_valid() is false and the vmap path
+ * is not taken), and every other writer reaches it through memcpy_toio().
+ * Keeping the bounce buffer leaves that access pattern exactly as it was and
+ * costs one ~100-byte, cache-resident memcpy per line, which is nothing beside
+ * what was removed.
+ */
+static char *pmsg_buffer;
+
 static ssize_t write_pmsg(struct file *file, const char __user *buf,
 			  size_t count, loff_t *ppos)
 {
-	size_t i, buffer_size;
-	char *buffer;
+	size_t i;
 
 	if (!count)
 		return 0;
@@ -33,33 +65,30 @@ static ssize_t write_pmsg(struct file *file, const char __user *buf,
 	if (!access_ok(VERIFY_READ, buf, count))
 		return -EFAULT;
 
-	buffer_size = count;
-	if (buffer_size > PMSG_MAX_BOUNCE_BUFFER_SIZE)
-		buffer_size = PMSG_MAX_BOUNCE_BUFFER_SIZE;
-	buffer = vmalloc(buffer_size);
-	if (!buffer)
-		return -ENOMEM;
-
 	mutex_lock(&pmsg_lock);
+
+	if (unlikely(!pmsg_buffer)) {
+		mutex_unlock(&pmsg_lock);
+		return -ENOMEM;
+	}
+
 	for (i = 0; i < count; ) {
-		size_t c = min(count - i, buffer_size);
+		size_t c = min(count - i, (size_t)PMSG_MAX_BOUNCE_BUFFER_SIZE);
 		u64 id;
 		long ret;
 
-		ret = __copy_from_user(buffer, buf + i, c);
+		ret = __copy_from_user(pmsg_buffer, buf + i, c);
 		if (unlikely(ret != 0)) {
 			mutex_unlock(&pmsg_lock);
-			vfree(buffer);
 			return -EFAULT;
 		}
-		psinfo->write_buf(PSTORE_TYPE_PMSG, 0, &id, 0, buffer, c,
+		psinfo->write_buf(PSTORE_TYPE_PMSG, 0, &id, 0, pmsg_buffer, c,
 				  psinfo);
 
 		i += c;
 	}
 
 	mutex_unlock(&pmsg_lock);
-	vfree(buffer);
 	return count;
 }
 
@@ -86,10 +115,16 @@ void pstore_register_pmsg(void)
 {
 	struct device *pmsg_device;
 
+	pmsg_buffer = kmalloc(PMSG_MAX_BOUNCE_BUFFER_SIZE, GFP_KERNEL);
+	if (!pmsg_buffer) {
+		pr_err("failed to allocate bounce buffer\n");
+		goto err;
+	}
+
 	pmsg_major = register_chrdev(0, PMSG_NAME, &pmsg_fops);
 	if (pmsg_major < 0) {
 		pr_err("register_chrdev failed\n");
-		goto err;
+		goto err_chrdev;
 	}
 
 	pmsg_class = class_create(THIS_MODULE, PMSG_NAME);
@@ -111,6 +146,9 @@ err_device:
 	class_destroy(pmsg_class);
 err_class:
 	unregister_chrdev(pmsg_major, PMSG_NAME);
+err_chrdev:
+	kfree(pmsg_buffer);
+	pmsg_buffer = NULL;
 err:
 	return;
 }
