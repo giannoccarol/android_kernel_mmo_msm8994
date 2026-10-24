@@ -23,3 +23,25 @@
 	qcom,board-id = <26 0>;
 	qcom,pmic-id = <0x20009 0x2000a 0x0 0x0>;
 };
+
+/*
+ * Keep the stock cityman modem load addresses out of Linux allocations.
+ * The common ramoops address overlaps the stock modem image.
+ */
+&modem_mem {
+	reg = <0 0x07000000 0 0x05a00000>;
+};
+
+&peripheral_mem {
+	reg = <0 0x0ca00000 0 0x01f00000>;
+};
+
+&ramoops_mem {
+	reg = <0 0x0f200000 0 0x00200000>;
+};
+
+&soc {
+	ramoops {
+		android,ramoops-buffer-start = <0x0f200000>;
+	};
+};
