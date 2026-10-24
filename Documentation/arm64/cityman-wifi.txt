@@ -80,10 +80,11 @@ a scan (10 result rows), and a subsequent 5/5 Internet ping without loss.
 Uptime was observed above 250 seconds. These are short functional checks,
 not a long-term reliability or unplugged suspend test.
 
-A packaged boot image was flashed successfully, but an ordinary boot from
-that partition has not yet been verified. Further device testing stopped
-when the owner started using the phone concurrently. Reboots during that
-period cannot be attributed to this patch without further evidence.
+A packaged boot image was flashed successfully. The owner subsequently
+confirmed that the phone booted normally from it; this is owner-reported.
+Long-duration operation and suspend/resume without USB remain unverified.
+During concurrent owner testing, reboots cannot be attributed to this patch
+without further evidence.
 
 Excluded experiments
 --------------------
