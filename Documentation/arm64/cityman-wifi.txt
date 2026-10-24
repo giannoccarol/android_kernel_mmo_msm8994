@@ -1,0 +1,93 @@
+Lumia 950 XL (cityman): QCA6174 PCIe bring-up
+===========================================
+
+Baseline: Android4Lumia950/android_kernel_mmo_msm8994,
+lineage-18.1-talkman, fd5d9fc0c43b184913a45a65eb26aa0a3afef725.
+Hardware tested: Lumia 950 XL, stock Lumia TrustZone and installer/LK2ND
+boot chain, LineageOS 18.1 userspace. Talkman has not been hardware tested.
+
+Failure and fix
+---------------
+RC1 established a Gen1 x1 link, but endpoint configuration reads returned
+0xffffffff. A PHY reset alone did not recover the endpoint. Asserting and
+deasserting GCC_PCIE_1_BCR (GCC + 0x1b40) before initial controller setup
+made the endpoint readable as 168c:003e, revision 0x32 (QCA6174).
+
+Expose that controller reset as an optional clock-framework reset, matching
+the existing PHY-reset interface. Only cityman requests it. Reset only
+before initial enumeration: repeating a core reset on runtime resume would
+lose the bridge configuration. Keep the original clock rates, PHY tuning,
+PCIe windows and link-power settings.
+
+Cityman also restores qcom,ep-wakeirq so CNSS powers WLAN before its first
+PCIe enumeration. No special CNSS retry or D3 workaround is included.
+
+Modem prerequisites
+-------------------
+The stock cityman MBA authenticates from 0x06e80000; modem metadata uses
+0x06f80000. Normal DMA allocation can place these buffers outside the
+addresses accepted by that firmware. Use those windows only on mmo,cityman,
+retaining normal DMA allocation and cleanup on other machines. Both windows
+are inside the existing 0x06300000-0x07000000 removed memory hole.
+
+Restore the cityman modem/peripheral reservations to 0x07000000/0x0ca00000
+and move ramoops to 0x0f200000 with a matching 2 MiB reservation. The common
+ramoops location 0x070a0000 overlaps the stock cityman modem image. These
+changes are board-specific and keep the common talkman layout unchanged.
+
+Firmware prerequisite (not distributed with this patch)
+-----------------------------------------------------
+Use an Android QCA6174 hw3.x SGMT image as /vendor/firmware/qwlan30.bin.
+The tested image is 750788 bytes with SHA-256:
+f84fd11d406af4d2c5580b25ed770718970f38c7b736fcfc2a18fbe578c6d751
+
+A 1068368-byte Windows QCAWPM container with SHA-256 below did not work
+with this Android driver and must not be substituted just because it has
+the same filename:
+3b7e5f8279ac3ae9f2abd9ebc4265da1dda57cc5fc2464d5f4d0806d89e575ba
+
+Retain the device's Lumia board calibration bdwlan30.bin. The tested board
+file is 8124 bytes, SHA-256:
+126e1918872bab62d8f7b6b5d9d712d68cb341e15fb727ba5e199cc941077664
+Do not replace device calibration with an unrelated phone's board data.
+
+Build and reproduce
+-------------------
+Use the Android GCC 4.9 aarch64 toolchain, then:
+
+  make ARCH=arm64 mmo_defconfig
+  make -j8 ARCH=arm64 CROSS_COMPILE=/path/to/aarch64-linux-android- Image.gz-dtb
+
+Preserve the known-working boot image ramdisk, header offsets and command
+line. Package Image.gz followed by the talkman DTB and cityman DTB, in that
+order, if retaining androidboot.dtb_idx=1. Boot the test image using fastboot
+boot before installing it. A build alone does not verify hardware behavior.
+
+Expected evidence: RC1 core reset, 168c:003e in PCI sysfs, MBA boot done,
+modem brought out of reset, WMI UNIFIED READY, wlan.driver.status=ok,
+Android-validated network and traffic through wlan0.
+
+Validation status (2026-10-24)
+------------------------------
+The initial reset implementation enumerated QCA6174, scanned access points,
+connected at 5 GHz/300 Mbps link rate and passed an Internet ping. The user
+reported browsing and a 100 Mbps speed test. That experimental build later
+rebooted and is not a long-term stability claim.
+
+The cleaned implementation also boots the modem, enumerates QCA6174 and
+connects at 5 GHz. It passed Wi-Fi off/on, screen off/on with USB attached,
+a scan (10 result rows), and a subsequent 5/5 Internet ping without loss.
+Uptime was observed above 250 seconds. These are short functional checks,
+not a long-term reliability or unplugged suspend test.
+
+A packaged boot image was flashed successfully, but an ordinary boot from
+that partition has not yet been verified. Further device testing stopped
+when the owner started using the phone concurrently. Reboots during that
+period cannot be attributed to this patch without further evidence.
+
+Excluded experiments
+--------------------
+No UEFI, XPU, SCM bypass, PCIe aperture relocation, 100 MHz gate rate,
+PHY tuning, forced L1 disable, debug MMIO interface, QMI changes, or firmware
+binaries are part of this patch. The measured PCIe security restore call
+succeeded; earlier secure-world failure theories did not explain the fault.

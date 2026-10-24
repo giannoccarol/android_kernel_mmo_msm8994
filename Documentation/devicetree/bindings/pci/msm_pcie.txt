@@ -51,6 +51,10 @@ Optional Properties:
 				"pcie_0_ldo";
   - max-clock-frequency-hz: list of the maximum operating frequencies stored
 				in the same order of clock names;
+  - clocks/clock-names may additionally contain "core_reset" for the controller
+    block reset. Append after the platform clocks, with a zero rate in
+    max-clock-frequency-hz. Pulsed for initial enumeration while PERST is
+    asserted, before restoring secure configuration and programming the PHY.
   - qcom,l0s-supported: L0s is supported.
   - qcom,l1-supported: L1 is supported.
   - qcom,l1ss-supported: L1 sub-states (L1ss) is supported.

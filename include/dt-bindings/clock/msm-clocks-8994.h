@@ -174,6 +174,7 @@
 #define clk_usb3_phy_aux_clk_src 0x15eec63c
 #define clk_usb_hs_system_clk_src 0x28385546
 #define clk_gcc_pcie_phy_0_reset 0x6bb4df33
+#define clk_gcc_pcie_1_reset 0x9a097ee9
 #define clk_gcc_pcie_phy_1_reset 0x5fc03a70
 #define clk_gcc_qusb2_phy_reset 0x3ce5fa84
 #define clk_gcc_usb3_phy_reset 0x03d559f1
