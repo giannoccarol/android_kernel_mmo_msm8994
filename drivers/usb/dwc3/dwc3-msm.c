@@ -3061,6 +3061,17 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	mdwc->charger.internal_chg_detect = of_property_read_bool(node,
 				"qcom,internal-chg-detect");
 
+	/*
+	 * Boards whose USB-C port has no Type-C driver can set the input
+	 * current the CC lines would advertise. It replaces the 500 mA of a
+	 * standard downstream port, as a CC notification would; the charger
+	 * AICL still lowers it on a port that cannot supply it.
+	 */
+	if (!of_property_read_u32(node, "qcom,default-cc-power-max-ma",
+				&mdwc->ext_xceiv.cc_power_max))
+		dev_info(&pdev->dev, "default CC power %u mA\n",
+				mdwc->ext_xceiv.cc_power_max);
+
 	ret = of_property_read_u32(node, "qcom,lpm-to-suspend-delay-ms",
 				&mdwc->lpm_to_suspend_delay);
 	if (ret) {
