@@ -37,8 +37,9 @@ static int request(void *client,unsigned msg,const void *data,unsigned size)
 }
 int main(int argc,char **argv)
 {
- if(argc>2||(argc==2&&strcmp(argv[1],"--observe-only"))){fprintf(stderr,"usage: %s [--observe-only]\n",argv[0]);return 2;}
+ if(argc>2||(argc==2&&strcmp(argv[1],"--observe-only")&&strcmp(argv[1],"--activate-radio"))){fprintf(stderr,"usage: %s [--observe-only|--activate-radio]\n",argv[0]);return 2;}
  int observe=argc==2&&!strcmp(argv[1],"--observe-only");
+ int radio=argc==2&&!strcmp(argv[1],"--activate-radio");
  char compatible[256]={0};FILE *f=fopen("/proc/device-tree/compatible","rb");
  if(!f)f=fopen("/sys/firmware/devicetree/base/compatible","rb");
  size_t count=0;if(f){count=fread(compatible,1,sizeof(compatible)-1,f);fclose(f);}
@@ -60,13 +61,17 @@ int main(int argc,char **argv)
  release_fn release=(release_fn)dlsym(cci,"qmi_client_release");
  void *object=dlsym(services,"uim_qmi_idl_service_object_v01"),*client=NULL;
  if(!init||!send_raw||!release||!object)return 1;
- union {max_align_t align;uint8_t bytes[1024];} params={0};
+ union {max_align_t align;uint8_t bytes[1024];} params[3]={0};
+ void *nas=NULL,*dms=NULL;
+ void *nas_object=dlsym(services,"nas_qmi_idl_service_object_v01");
+ void *dms_object=dlsym(services,"dms_qmi_idl_service_object_v01");
+ if(radio&&(!nas_object||!dms_object))return 1;
  for(unsigned attempt=0;attempt<30;attempt++){
-  int ret=init(object,0xffff,NULL,NULL,&params,8000,&client);
+  int ret=init(object,0xffff,NULL,NULL,&params[0],8000,&client);
   if(!ret)break;LOG("Waiting for UIM transport: %d",ret);sleep(2);
  }
  if(!client)return 1;
- int last=-1,done=1;unsigned failures=0;
+ int last=-1,done=1,radio_attempted=0;unsigned failures=0;
  for(;;){
   unsigned n;if(request(client,0x2f,NULL,0)){if(++failures==6)break;sleep(5);continue;}failures=0;
   const uint8_t *p=tlv(0x10,&n);
@@ -75,8 +80,31 @@ int main(int argc,char **argv)
   }
   unsigned index=le16(p),state=p[16],perso=p[17],aid_len=p[21],pin=p[23+aid_len];
   int signature=state|(pin<<8)|(perso<<16);
-  if(signature!=last){LOG("USIM state=%u PIN-state=%u personalization=%u",state,pin,perso);last=signature;}
-  if(state==7){LOG("USIM ready");done=0;break;}
+  if(signature!=last){LOG("USIM state=%u PIN-state=%u personalization=%u",state,pin,perso);if(state==7)LOG("USIM ready");last=signature;}
+  if(state==7){
+   if(!radio){done=0;break;}
+   if(!dms&&init(dms_object,0xffff,NULL,NULL,&params[1],8000,&dms)){sleep(5);continue;}
+   if(!nas&&init(nas_object,0xffff,NULL,NULL,&params[2],8000,&nas)){sleep(5);continue;}
+   /* Observe Android's radio power decision; never force DMS online. */
+   if(request(dms,0x2d,NULL,0))break;
+   const uint8_t *mode=tlv(1,&n);if(!mode||n!=1)break;
+   if(*mode!=0)radio_attempted=0;
+   else if(!radio_attempted){
+    /* One activation attempt per ready/online transition, not a force loop. */
+    radio_attempted=1;
+    if(request(nas,0x5c,NULL,0))break;
+    const uint8_t *mask=tlv(0x15,&n);if(!mask||n!=8)break;
+    uint8_t active[11]={0x14,8,0};memcpy(active+3,mask,8);
+    if(!(active[3]&1)){
+     active[3]|=1;
+     if(!request(nas,0x4b,active,sizeof(active)))LOG("Primary radio subscription enabled");
+    }
+   }
+   sleep(5);continue;
+  }
+  if(nas){release(nas);nas=NULL;}
+  if(dms){release(dms);dms=NULL;}
+  radio_attempted=0;
   if(observe){done=0;break;}
   if(index==65535&&state==1){
    uint8_t activation[64]={1,2,0,0,1,0x10,0,0,1,0};
@@ -91,5 +119,6 @@ int main(int argc,char **argv)
   /* PIN-required/PUK-required states are observed only; the user handles them. */
   sleep(state==2||state==3?5:2);
  }
+ if(nas)release(nas);if(dms)release(dms);
  release(client);return done;
 }

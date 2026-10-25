@@ -4,6 +4,7 @@ This directory preserves the Android userspace fixes together with their kernel
 base. It is not built or installed by the kernel Makefile. The reference platform
 is Lumia 950 XL, LineageOS 18.1, existing Qualcomm vendor libraries and qmuxd.
 No vendor binaries, firmware, private logs, SIM identifiers or PINs belong here.
+See `Documentation/arm64/cityman-ril.txt` for the measured coexistence fix.
 
 ## Verified on hardware
 
@@ -40,11 +41,16 @@ option to each of qmuxd, netmgrd and ril-daemon in the device's init sources:
 ```
 
 The helper is Cityman-gated and does not enter a PIN. Its `--observe-only` option
-does not activate/publish the SIM. A subsequent helper exit at READY is expected.
+does not activate/publish the SIM. Without options it exits at READY. The init
+service uses `--activate-radio`: it stays alive, enables the primary NAS
+subscription once per SIM-ready/radio-online transition, and retains its NAS/DMS
+clients. It only queries DMS power state; it never forces DMS online or disables
+Android airplane mode. The active-subscription mask preserves any existing bits.
+The disabled init service starts when qmuxd runs and restarts after an exit.
 An invalid command-line option is rejected. The fallback device check requires
 SoC 207, the exact boot token `androidboot.dtb_idx=1`, and the scoped shim.
-Support for multiple applications/cards, hotplug and modem restart recovery is
-not established. Do not enable this service on Talkman.
+Support for multiple applications/cards and hotplug is not established. Recovery
+after sustained modem failures needs further validation. Do not enable on Talkman.
 
 ## Registration and data: conditional hardware result
 
@@ -62,15 +68,19 @@ stopped. The failure reason is
 `coex_qmb.c:230:MCS_CXM assertion enc_rc == QMI_IDL_LIB_NO_ERR && out_buf_len >`.
 The SSR clears the active mask, invalidates QMI clients and reinitializes the
 SIM; it must not be misdiagnosed as a wrong PIN or merely a RIL mask override.
-CNSS's modem-status notification causes WLAN firmware to enable its WCI-2 UART;
-a Cityman-only DT test suppressing that notification is under investigation.
+CNSS's modem-status notification causes WLAN firmware to enable its WCI-2 UART.
+Suppressing the notification in DT did not fix it. Explicitly sending the OFF
+coexistence state to WLAN firmware on Cityman did: the #39 RAM test maintained
+Iliad LTE and Wi-Fi simultaneously, mobile-interface HTTPS returned HTTP 200,
+Wi-Fi ping passed 3/3, and no modem SSR appeared. Both cnd and cnss-daemon were
+running. The actual modem remains on and its SSR tracking is unchanged.
 
 A spontaneous full-phone reboot also occurred after the #37 data test. The owner
 confirmed it was not manual; pstore was empty after reboot, so its cause remains
-unknown. Do not declare the RIL stable or fix the problem by permanently turning
-off Wi-Fi. Do not repeatedly force NAS activation or DMS online in a service:
-Android must retain airplane-mode control. Bootstrap restart recovery and a
-complete persistent NAS activation service are still open work.
+unknown. Do not declare long-term stability from these short tests. The #39
+airplane-mode test showed DMS low-power while enabled, then LTE and mobile HTTPS
+returned after disabling airplane mode. No forced-online loop is used. Calls,
+SMS, audio routing, long-duration operation and unplugged suspend are unverified.
 
 `qmi-client-query SERVICE MESSAGE [TLV_HEX [HOLD_SECONDS [POLL_MESSAGE]]]` can
 keep one client open and poll a second request on that same client. Polling is

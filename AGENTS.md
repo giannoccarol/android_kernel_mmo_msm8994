@@ -12,11 +12,14 @@
   patch is archived locally; do not present relocation as required for RIL.
 - Android RIL sources and integration notes live in `tools/cityman-ril`. Preserve
   qmuxd ownership of smdcntl0. The scoped msm8994 shim and UIM activation /
-  Subscription OK reach SIM LOADED; LTE registration and data worked with Wi-Fi disabled; coexistence/stability remain unresolved.
-- Wi-Fi together with an active modem currently triggers SSR with a coex_qmb.c:230
-  assertion. Investigate the cause; repeated PIN prompts can follow those modem
-  restarts and do not establish an incorrect PIN. Do not force radio activation
-  periodically or bypass Android airplane-mode control.
+  Subscription OK reach SIM LOADED. `--activate-radio` retains NAS/DMS clients
+  and enables the primary subscription only when Android has the radio online.
+- Cityman CNSS explicitly reports coexistence OFF to WLAN firmware, avoiding the
+  coex_qmb.c:230 modem SSR seen with the incompatible WCI-2 UART exchange. This
+  leaves actual modem power and SSR tracking unchanged; suppressing the DT
+  notification alone did not work. RAM #39 passed simultaneous Wi-Fi/LTE data
+  and airplane-mode recovery. Long-term stability, calls and SMS are unverified.
+- Never force DMS online periodically or bypass Android airplane-mode control.
 - Never commit toolchains, firmware/vendor binaries, boot images, private logs,
   NV backups or SIM identifiers. Keep raw diagnostics in the surrounding project.
 - Back up and hash before changing device files. Prefer RAM boot tests, retain
