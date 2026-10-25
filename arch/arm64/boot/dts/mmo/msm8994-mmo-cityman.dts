@@ -27,7 +27,8 @@
 
 /*
  * Keep the stock cityman modem load addresses out of Linux allocations.
- * The common ramoops address overlaps the stock modem image.
+ * ramoops uses the common region at the top of DDR bank 1, clear of the
+ * modem image.
  */
 &modem_mem {
 	reg = <0 0x07000000 0 0x05a00000>;
@@ -35,16 +36,6 @@
 
 &peripheral_mem {
 	reg = <0 0x0ca00000 0 0x01f00000>;
-};
-
-&ramoops_mem {
-	reg = <0 0x0f200000 0 0x00200000>;
-};
-
-&soc {
-	ramoops {
-		android,ramoops-buffer-start = <0x0f200000>;
-	};
 };
 
 /* Reset the controller as well as the PHY before enumerating QCA6174. */
