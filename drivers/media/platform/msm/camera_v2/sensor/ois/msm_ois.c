@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2015, 2017 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014 - 2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -298,8 +298,7 @@ static int32_t msm_ois_config(struct msm_ois_ctrl_t *o_ctrl,
 			break;
 		}
 
-		if (!conf_array.size ||
-			conf_array.size > I2C_SEQ_REG_DATA_MAX) {
+		if (!conf_array.size) {
 			pr_err("%s:%d failed\n", __func__, __LINE__);
 			rc = -EFAULT;
 			break;
@@ -436,6 +435,7 @@ static long msm_ois_subdev_ioctl(struct v4l2_subdev *sd,
 			return msm_ois_close(sd, NULL);
 		}
 	default:
+		pr_err_ratelimited("unsupported compat type 0x%x\n", cmd);
 		return -ENOIOCTLCMD;
 	}
 }
@@ -542,14 +542,22 @@ static long msm_ois_subdev_do_ioctl(
 	struct file *file, unsigned int cmd, void *arg)
 {
 	long rc = 0;
-	struct video_device *vdev = video_devdata(file);
-	struct v4l2_subdev *sd = vdev_to_v4l2_subdev(vdev);
-	struct msm_ois_cfg_data32 *u32 =
-		(struct msm_ois_cfg_data32 *)arg;
+	struct video_device *vdev;
+	struct v4l2_subdev *sd;
+	struct msm_ois_cfg_data32 *u32;
 	struct msm_ois_cfg_data ois_data;
-	void *parg = arg;
+	void *parg;
 	struct msm_camera_i2c_seq_reg_setting settings;
 	struct msm_camera_i2c_seq_reg_setting32 settings32;
+
+	if (!file || !arg) {
+		pr_err("%s:failed NULL parameter\n", __func__);
+		return -EINVAL;
+	}
+	vdev = video_devdata(file);
+	sd = vdev_to_v4l2_subdev(vdev);
+	u32 = (struct msm_ois_cfg_data32 *)arg;
+	parg = arg;
 
 	ois_data.cfgtype = u32->cfgtype;
 

@@ -59,7 +59,7 @@ static void msm_ispif_io_dump_reg(struct ispif_device *ispif)
 {
 	if (!ispif->enb_dump_reg)
 		return;
-	msm_camera_io_dump(ispif->base, 0x250);
+	msm_camera_io_dump(ispif->base + 0x400, 0x80);
 }
 
 
@@ -362,23 +362,23 @@ static void msm_ispif_sel_csid_core(struct ispif_device *ispif,
 	switch (intftype) {
 	case PIX0:
 		data &= ~(BIT(1) | BIT(0));
-		data |= (uint32_t) csid;
+		data |= csid;
 		break;
 	case RDI0:
 		data &= ~(BIT(5) | BIT(4));
-		data |= ((uint32_t) csid) << 4;
+		data |= (csid << 4);
 		break;
 	case PIX1:
 		data &= ~(BIT(9) | BIT(8));
-		data |= ((uint32_t) csid) << 8;
+		data |= (csid << 8);
 		break;
 	case RDI1:
 		data &= ~(BIT(13) | BIT(12));
-		data |= ((uint32_t) csid) << 12;
+		data |= (csid << 12);
 		break;
 	case RDI2:
 		data &= ~(BIT(21) | BIT(20));
-		data |= ((uint32_t) csid) << 20;
+		data |= (csid << 20);
 		break;
 	}
 
@@ -387,8 +387,8 @@ static void msm_ispif_sel_csid_core(struct ispif_device *ispif,
 }
 
 static void msm_ispif_enable_crop(struct ispif_device *ispif,
-	uint8_t intftype, enum msm_ispif_vfe_intf vfe_intf, uint16_t start_pixel,
-	uint16_t end_pixel)
+	uint8_t intftype, enum msm_ispif_vfe_intf vfe_intf,
+	uint16_t start_pixel, uint16_t end_pixel)
 {
 	uint32_t data;
 	BUG_ON(!ispif);
@@ -419,7 +419,8 @@ static void msm_ispif_enable_crop(struct ispif_device *ispif,
 }
 
 static void msm_ispif_enable_intf_cids(struct ispif_device *ispif,
-	uint8_t intftype, uint16_t cid_mask, enum msm_ispif_vfe_intf vfe_intf, uint8_t enable)
+	uint8_t intftype, uint16_t cid_mask, enum msm_ispif_vfe_intf vfe_intf,
+	uint8_t enable)
 {
 	uint32_t intf_addr, data;
 
@@ -454,9 +455,9 @@ static void msm_ispif_enable_intf_cids(struct ispif_device *ispif,
 
 	data = msm_camera_io_r(ispif->base + intf_addr);
 	if (enable)
-		data |=  (uint32_t) cid_mask;
+		data |= cid_mask;
 	else
-		data &= ~((uint32_t) cid_mask);
+		data &= ~cid_mask;
 	msm_camera_io_w_mb(data, ispif->base + intf_addr);
 }
 
@@ -560,7 +561,7 @@ static uint16_t msm_ispif_get_cids_mask_from_cfg(
 
 	BUG_ON(!entry);
 
-	for (i = 0; i < entry->num_cids && i < MAX_CID_CH_V2; i++)
+	for (i = 0; i < entry->num_cids; i++)
 		cids_mask |= (1 << entry->cids[i]);
 
 	return cids_mask;
@@ -609,9 +610,9 @@ static int msm_ispif_config(struct ispif_device *ispif,
 		intftype = params->entries[i].intftype;
 
 		vfe_intf = params->entries[i].vfe_intf;
-
-		CDBG("%s intftype %x, vfe_intf %d, csid %d\n", __func__,
-			intftype, vfe_intf, params->entries[i].csid);
+		if (intftype >= RDI0)
+			pr_err("%s intftype %x, vfe_intf %d, csid %d\n", __func__,
+				intftype, vfe_intf, params->entries[i].csid);
 
 		if ((intftype >= INTF_MAX) ||
 			(vfe_intf >=  ispif->vfe_info.num_vfe) ||
@@ -637,6 +638,9 @@ static int msm_ispif_config(struct ispif_device *ispif,
 			params->entries[i].csid, vfe_intf);
 		cid_mask = msm_ispif_get_cids_mask_from_cfg(
 				&params->entries[i]);
+		if (intftype >= RDI0)
+			pr_err("%s: cid_mask %x\n", __func__, cid_mask);
+
 		msm_ispif_enable_intf_cids(ispif, intftype,
 			cid_mask, vfe_intf, 1);
 		if (params->entries[i].crop_enable)
@@ -689,7 +693,7 @@ static void msm_ispif_intf_cmd(struct ispif_device *ispif, uint32_t cmd_bits,
 			pr_err("%s: invalid interface type\n", __func__);
 			return;
 		}
-		if (params->entries[i].num_cids > MAX_CID_CH_V2) {
+		if (params->entries[i].num_cids > MAX_CID_CH) {
 			pr_err("%s: out of range of cid_num %d\n",
 				__func__, params->entries[i].num_cids);
 			return;
@@ -719,10 +723,17 @@ static void msm_ispif_intf_cmd(struct ispif_device *ispif, uint32_t cmd_bits,
 			}
 		}
 		/* cmd for PIX0, PIX1, RDI0, RDI1 */
-		if (ispif->applied_intf_cmd[vfe_intf].intf_cmd != 0xFFFFFFFF)
+		if (ispif->applied_intf_cmd[vfe_intf].intf_cmd != 0xFFFFFFFF) {
+			if (cmd_bits == ISPIF_INTF_CMD_ENABLE_FRAME_BOUNDARY)
+				pr_err("%s: vfe %d intf_cmd %x\n", __func__,
+					vfe_intf,
+					ispif->applied_intf_cmd[vfe_intf].
+					intf_cmd);
+
 			msm_camera_io_w_mb(
 				ispif->applied_intf_cmd[vfe_intf].intf_cmd,
 				ispif->base + ISPIF_VFE_m_INTF_CMD_0(vfe_intf));
+		}
 
 		/* cmd for RDI2 */
 		if (ispif->applied_intf_cmd[vfe_intf].intf_cmd1 != 0xFFFFFFFF)
@@ -1139,7 +1150,9 @@ static int msm_ispif_set_vfe_info(struct ispif_device *ispif,
 			   (vfe_info ? vfe_info->num_vfe:0));
 		return -EINVAL;
 	}
+
 	memcpy(&ispif->vfe_info, vfe_info, sizeof(struct msm_ispif_vfe_info));
+
 	return 0;
 }
 
