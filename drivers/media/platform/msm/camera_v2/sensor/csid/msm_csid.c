@@ -153,12 +153,22 @@ static int msm_csid_config(struct csid_device *csid_dev,
 		return -EINVAL;
 	}
 
-	CDBG("%s csid_params, lane_cnt = %d, lane_assign = 0x%x\n",
-		__func__,
-		csid_params->lane_cnt,
-		csid_params->lane_assign);
-	CDBG("%s csid_params phy_sel = %d\n", __func__,
-		csid_params->phy_sel);
+	/* cityman bring-up: the CSI setup comes from the userspace sensor library */
+	pr_info("%s: lane_cnt %d lane_assign 0x%x phy_sel %d csi_clk %u num_cid %d\n",
+		__func__, csid_params->lane_cnt, csid_params->lane_assign,
+		csid_params->phy_sel, csid_params->csi_clk,
+		csid_params->lut_params.num_cid);
+	{
+		int i;
+
+		for (i = 0; i < csid_params->lut_params.num_cid &&
+		     i < MAX_CID; i++)
+			if (csid_params->lut_params.vc_cfg[i])
+				pr_info("%s: cid %d dt 0x%x df %d\n", __func__,
+					csid_params->lut_params.vc_cfg[i]->cid,
+					csid_params->lut_params.vc_cfg[i]->dt,
+					csid_params->lut_params.vc_cfg[i]->decode_format);
+	}
 
 	msm_csid_reset(csid_dev);
 

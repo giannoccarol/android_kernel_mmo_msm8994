@@ -105,13 +105,12 @@ static int msm_csiphy_lane_config(struct csiphy_device *csiphy_dev,
 		return rc;
 	}
 
-	CDBG("%s csiphy_params, mask = 0x%x cnt = %d\n",
-		__func__,
-		csiphy_params->lane_mask,
-		csiphy_params->lane_cnt);
-	CDBG("%s csiphy_params, settle cnt = 0x%x csid %d\n",
-		__func__, csiphy_params->settle_cnt,
-		csiphy_params->csid_core);
+	/* cityman bring-up: the PHY setup comes from the userspace sensor library */
+	pr_info("%s: csiphy %d lane_mask 0x%x lane_cnt %d settle 0x%x csid %d combo %d clk %u\n",
+		__func__, csiphy_dev->pdev->id, csiphy_params->lane_mask,
+		csiphy_params->lane_cnt, csiphy_params->settle_cnt,
+		csiphy_params->csid_core, csiphy_params->combo_mode,
+		csiphy_params->csiphy_clk);
 
 	if (csiphy_dev->hw_version >= CSIPHY_VERSION_V30) {
 		val = msm_camera_io_r(csiphy_dev->clk_mux_base);
