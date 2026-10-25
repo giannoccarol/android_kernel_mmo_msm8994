@@ -130,6 +130,17 @@ static bool cx_phase_ctrl_enabled;
 static bool vdd_mx_enabled;
 static bool therm_reset_enabled;
 static bool online_core;
+/*
+ * qcom,poll-cpu-sensors: after late init, keep polling every CPU sensor
+ * and step the clusters in freq-control-mask down from the hottest one,
+ * until userspace takes over by writing enabled=0. Writing enabled=1
+ * starts the polling again. The interrupt mode limits stay active.
+ */
+static bool poll_cpu_sensors;
+static bool poll_active;
+static int poll_tsens[NR_CPUS];
+#define POLL_MAX_CLUSTERS 8
+static int poll_freq_idx[POLL_MAX_CLUSTERS];
 static bool cluster_info_probed;
 static bool cluster_info_nodes_called;
 static int *tsens_id_map;
@@ -198,6 +209,7 @@ struct cpu_info {
 	uint32_t user_min_freq;
 	uint32_t limited_max_freq;
 	uint32_t limited_min_freq;
+	uint32_t poll_max_freq;
 	bool freq_thresh_clear;
 	struct cluster_info *parent_ptr;
 };
@@ -2950,10 +2962,84 @@ static void do_freq_control(long temp)
 	put_online_cpus();
 }
 
+static void do_poll_cpu_sensors(void)
+{
+	uint32_t _cluster = 0;
+	int cpu, idx, high;
+	long temp = 0, max_temp = LONG_MIN;
+	bool mitigate, changed = false;
+	uint32_t freq;
+	struct cluster_info *cluster_ptr = NULL;
+
+	for_each_possible_cpu(cpu) {
+		if (poll_tsens[cpu] < 0)
+			continue;
+		if (!therm_get_temp(poll_tsens[cpu], THERM_TSENS_ID, &temp))
+			max_temp = max(max_temp, temp);
+	}
+	if (max_temp == LONG_MIN || !core_ptr)
+		return;
+	if (!freq_table_get && check_freq_table())
+		return;
+
+	if (max_temp >= msm_thermal_info.limit_temp_degC)
+		mitigate = true;
+	else if (max_temp < msm_thermal_info.limit_temp_degC -
+			msm_thermal_info.temp_hysteresis_degC)
+		mitigate = false;
+	else
+		return;
+
+	for (; _cluster < core_ptr->entity_count &&
+			_cluster < POLL_MAX_CLUSTERS; _cluster++) {
+		cluster_ptr = &core_ptr->child_entity_ptr[_cluster];
+		if (!cluster_ptr->freq_table)
+			continue;
+		high = cluster_ptr->freq_idx_high;
+		idx = poll_freq_idx[_cluster] < 0 ? high :
+			poll_freq_idx[_cluster];
+		if (mitigate)
+			idx = max_t(int, cluster_ptr->freq_idx_low,
+				idx - (int)msm_thermal_info.bootup_freq_step);
+		else
+			idx = min_t(int, high,
+				idx + (int)msm_thermal_info.bootup_freq_step);
+		if (idx == (poll_freq_idx[_cluster] < 0 ? high :
+				poll_freq_idx[_cluster]))
+			continue;
+		poll_freq_idx[_cluster] = idx;
+		freq = (idx >= high) ? UINT_MAX :
+			cluster_ptr->freq_table[idx].frequency;
+		for_each_cpu_mask(cpu, cluster_ptr->cluster_cores) {
+			if (!(msm_thermal_info.bootup_freq_control_mask &
+				BIT(cpu)))
+				continue;
+			if (cpus[cpu].poll_max_freq == freq)
+				continue;
+			cpus[cpu].poll_max_freq = freq;
+			changed = true;
+		}
+		if (changed)
+			pr_info_ratelimited(
+				"CPU sensor poll: cluster%d max %u. Temp:%ld\n",
+				cluster_ptr->cluster_id,
+				cluster_ptr->freq_table[idx].frequency,
+				max_temp);
+	}
+
+	if (changed && freq_mitigation_task)
+		complete(&freq_mitigation_complete);
+}
+
 static void check_temp(struct work_struct *work)
 {
 	long temp = 0;
 	int ret = 0;
+
+	if (poll_active) {
+		do_poll_cpu_sensors();
+		goto reschedule;
+	}
 
 	do_therm_reset();
 
@@ -2982,7 +3068,7 @@ static void check_temp(struct work_struct *work)
 	do_freq_control(temp);
 
 reschedule:
-	if (polling_enabled)
+	if (polling_enabled || poll_active)
 		schedule_delayed_work(&check_temp_work,
 				msecs_to_jiffies(msm_thermal_info.poll_ms));
 }
@@ -3178,6 +3264,9 @@ static __ref int do_freq_mitigation(void *data)
 
 			max_freq_req = min(max_freq_req,
 					cpus[cpu].suspend_max_freq);
+
+			max_freq_req = min(max_freq_req,
+					cpus[cpu].poll_max_freq);
 
 			min_freq_req = max(min_freq_limit,
 					cpus[cpu].user_min_freq);
@@ -4178,16 +4267,67 @@ static void interrupt_mode_init(void)
 	}
 }
 
+static void poll_cpu_sensors_start(void)
+{
+	uint32_t cpu = 0;
+	int i, n, found = 0;
+
+	if (!poll_cpu_sensors || poll_active || polling_enabled)
+		return;
+
+	for_each_possible_cpu(cpu) {
+		poll_tsens[cpu] = -1;
+		if (cpus[cpu].sensor_type &&
+			sscanf(cpus[cpu].sensor_type, "tsens_tz_sensor%d",
+				&n) == 1 && !check_sensor_id(n)) {
+			poll_tsens[cpu] = n;
+			found++;
+		}
+	}
+	if (!found) {
+		pr_err("No CPU tsens sensor to poll\n");
+		return;
+	}
+	for (i = 0; i < POLL_MAX_CLUSTERS; i++)
+		poll_freq_idx[i] = -1;
+
+	poll_active = true;
+	pr_info("Polling %d CPU sensors every %u ms\n", found,
+		msm_thermal_info.poll_ms);
+	schedule_delayed_work(&check_temp_work, 0);
+}
+
+static void poll_cpu_sensors_stop(void)
+{
+	uint32_t cpu = 0;
+
+	if (!poll_active)
+		return;
+
+	poll_active = false;
+	cancel_delayed_work_sync(&check_temp_work);
+	for_each_possible_cpu(cpu)
+		cpus[cpu].poll_max_freq = UINT_MAX;
+	if (freq_mitigation_task)
+		complete(&freq_mitigation_complete);
+	pr_info("CPU sensor polling stopped\n");
+}
+
 static int __ref set_enabled(const char *val, const struct kernel_param *kp)
 {
 	int ret = 0;
 
 	ret = param_set_bool(val, kp);
-	if (!enabled)
+	if (!enabled) {
 		interrupt_mode_init();
-	else
+		poll_cpu_sensors_stop();
+	} else if (poll_cpu_sensors && msm_thermal_probed &&
+			!polling_enabled) {
+		poll_cpu_sensors_start();
+	} else {
 		pr_info("no action for enabled = %d\n",
 			enabled);
+	}
 
 	pr_info("enabled = %d\n", enabled);
 
@@ -4580,6 +4720,7 @@ int msm_thermal_init(struct msm_thermal_data *pdata)
 		cpus[cpu].user_min_freq = 0;
 		cpus[cpu].limited_max_freq = UINT_MAX;
 		cpus[cpu].limited_min_freq = 0;
+		cpus[cpu].poll_max_freq = UINT_MAX;
 		cpus[cpu].freq_thresh_clear = false;
 	}
 	BUG_ON(!pdata);
@@ -5845,6 +5986,9 @@ static int msm_thermal_dev_probe(struct platform_device *pdev)
 	key = "qcom,freq-control-mask";
 	ret = of_property_read_u32(node, key, &data.bootup_freq_control_mask);
 
+	key = "qcom,poll-cpu-sensors";
+	poll_cpu_sensors = of_property_read_bool(node, key);
+
 	ret = probe_cc(node, &data, pdev);
 
 	ret = probe_freq_mitigation(node, &data, pdev);
@@ -5999,6 +6143,8 @@ int __init msm_thermal_late_init(void)
 	}
 	msm_thermal_add_mx_nodes();
 	interrupt_mode_init();
+	if (enabled)
+		poll_cpu_sensors_start();
 	create_cpu_topology_sysfs();
 	create_thermal_debugfs();
 	msm_thermal_add_bucket_info_nodes();
