@@ -2111,6 +2111,19 @@ static void q6asm_add_mmaphdr(struct audio_client *ac, struct apr_hdr *hdr,
 	return;
 }
 
+/*
+ * An ACDB without a stream topology for this device hands back 0, which the
+ * ADSP rejects when the stream is opened. Fall back to no post-processing.
+ */
+static int q6asm_get_stream_topology(void)
+{
+	int topology = q6asm_get_asm_topology();
+
+	if (!topology)
+		topology = ASM_STREAM_POSTPROCOPO_ID_NONE;
+	return topology;
+}
+
 static int __q6asm_open_read(struct audio_client *ac,
 			     uint32_t format, uint16_t bits_per_sample,
 			     bool use_v3_format)
@@ -2136,7 +2149,7 @@ static int __q6asm_open_read(struct audio_client *ac,
 	/* Stream prio : High, provide meta info with encoded frames */
 	open.src_endpointype = ASM_END_POINT_DEVICE_MATRIX;
 
-	open.preprocopo_id = q6asm_get_asm_topology();
+	open.preprocopo_id = q6asm_get_stream_topology();
 	open.bits_per_sample = bits_per_sample;
 	open.mode_flags = 0x0;
 
@@ -2352,7 +2365,7 @@ static int __q6asm_open_write(struct audio_client *ac, uint32_t format,
 	open.sink_endpointype = ASM_END_POINT_DEVICE_MATRIX;
 	open.bits_per_sample = bits_per_sample;
 
-	open.postprocopo_id = q6asm_get_asm_topology();
+	open.postprocopo_id = q6asm_get_stream_topology();
 	if (ac->perf_mode != LEGACY_PCM_MODE)
 		open.postprocopo_id = ASM_STREAM_POSTPROCOPO_ID_NONE;
 
@@ -2514,7 +2527,7 @@ static int __q6asm_open_read_write(struct audio_client *ac, uint32_t rd_format,
 	open.mode_flags = is_meta_data_mode ? BUFFER_META_ENABLE : 0;
 	open.bits_per_sample = bits_per_sample;
 	/* source endpoint : matrix */
-	open.postprocopo_id = q6asm_get_asm_topology();
+	open.postprocopo_id = q6asm_get_stream_topology();
 
 	open.postprocopo_id = overwrite_topology ?
 			      topology : open.postprocopo_id;
