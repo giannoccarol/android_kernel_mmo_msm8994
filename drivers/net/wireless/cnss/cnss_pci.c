@@ -291,6 +291,22 @@ static struct cnss_data {
 	bool monitor_wake_intr;
 } *penv;
 
+static int cnss_wlan_modem_coex_state(void)
+{
+	/*
+	 * Cityman's stock MPSS rejects the Android WLAN WCI-2 protocol and
+	 * asserts in coex_qmb.c when both radios are active. Explicitly tell
+	 * WLAN firmware to keep that coexistence interface off. Merely
+	 * suppressing modem notifications did not prevent the assertion.
+	 * The actual modem power state and SSR tracking remain unchanged.
+	 */
+	if (of_machine_is_compatible("mmo,cityman")) {
+		pr_info("Cityman: keeping WLAN modem coexistence interface off\n");
+		return 0;
+	}
+	return penv->modem_current_status;
+}
+
 static int cnss_wlan_vreg_on(struct cnss_wlan_vreg_info *vreg_info)
 {
 	int ret;
@@ -2020,7 +2036,7 @@ again:
 	}
 
 	if (penv->notify_modem_status && wdrv->modem_status)
-		wdrv->modem_status(pdev, penv->modem_current_status);
+		wdrv->modem_status(pdev, cnss_wlan_modem_coex_state());
 
 	return ret;
 
@@ -2330,7 +2346,7 @@ static int cnss_powerup(const struct subsys_desc *subsys)
 	}
 
 	if (penv->notify_modem_status && wdrv->modem_status)
-		wdrv->modem_status(pdev, penv->modem_current_status);
+		wdrv->modem_status(pdev, cnss_wlan_modem_coex_state());
 
 out:
 	penv->recovery_in_progress = false;
@@ -2473,7 +2489,7 @@ static int cnss_modem_notifier_nb(struct notifier_block *this,
 	if (!wdrv || !pdev || !wdrv->modem_status)
 		return NOTIFY_DONE;
 
-	wdrv->modem_status(pdev, penv->modem_current_status);
+	wdrv->modem_status(pdev, cnss_wlan_modem_coex_state());
 
 	return NOTIFY_OK;
 }
