@@ -42,3 +42,28 @@
 				"msm-dai-q6-mi2s.3";
 	};
 };
+
+/*
+ * Cityman has no ultrasound emitter and no speaker on the WCD9330's own
+ * class-D driver: the loudspeaker is the TAS2553 above. Once the card
+ * registers, the machine driver would otherwise claim PMI8994 GPIO 1 and
+ * the codec would switch the PMI8994 5 V boost on demand for an output
+ * that is not connected.
+ */
+&soc {
+	sound {
+		/delete-property/ qcom,ext-ult-spk-amp-gpio;
+	};
+};
+
+&slim_msm {
+	tomtom_codec {
+		/delete-property/ cdc-vdd-spkdrv-supply;
+		/delete-property/ qcom,cdc-vdd-spkdrv-voltage;
+		/delete-property/ qcom,cdc-vdd-spkdrv-current;
+		/delete-property/ cdc-vdd-spkdrv-2-supply;
+		/delete-property/ qcom,cdc-vdd-spkdrv-2-voltage;
+		/delete-property/ qcom,cdc-vdd-spkdrv-2-current;
+		/delete-property/ qcom,cdc-on-demand-supplies;
+	};
+};
