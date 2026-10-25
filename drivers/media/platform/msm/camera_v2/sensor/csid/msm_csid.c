@@ -416,6 +416,15 @@ static int msm_csid_release(struct csid_device *csid_dev)
 
 	irq = msm_camera_io_r(csid_dev->base +
 		csid_dev->ctrl_reg->csid_reg.csid_irq_status_addr);
+	/* cityman bring-up: what reached this CSID during the session */
+	pr_info("%s: csid %d irq 0x%x pkts %u ecc %u crc %u\n", __func__,
+		csid_dev->pdev->id, irq,
+		msm_camera_io_r(csid_dev->base +
+			csid_dev->ctrl_reg->csid_reg.csid_stats_total_pkts_rcvd_addr),
+		msm_camera_io_r(csid_dev->base +
+			csid_dev->ctrl_reg->csid_reg.csid_stats_ecc_addr),
+		msm_camera_io_r(csid_dev->base +
+			csid_dev->ctrl_reg->csid_reg.csid_stats_crc_addr));
 	msm_camera_io_w(irq, csid_dev->base +
 		csid_dev->ctrl_reg->csid_reg.csid_irq_clear_cmd_addr);
 	msm_camera_io_w(0, csid_dev->base +
