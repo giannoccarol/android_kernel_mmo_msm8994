@@ -1,0 +1,169 @@
+/*
+ * Lumia 950 XL (cityman) camera sensors.
+ *
+ * Replaces qcom/msm8994-camera-sensor-mtp.dtsi. The MTP nodes describe
+ * IMX214/OV4688 boards: their rails (L27/L17/L3), the rear2 slot on
+ * GPIO 94/93 (93 is the SiLabs FM reset here) and the EEPROM addresses do
+ * not match this phone.
+ *
+ * Wiring comes from the Lumia ACPI tables (DSDT CAMS/CAMF devices) and was
+ * confirmed on the phone with CCI reads:
+ *
+ *   rear  - Carrera module, Sony IMX230 die (0x0016 = 0x0230)
+ *           CCI master 1, slave 0x20, CSIPHY0/CSID0, MCLK0
+ *           reset GPIO 92, standby GPIO 91
+ *           VAF L23 2.85 V, VANA L29 2.85 V, VDIG L25 1.15 V, VIO LVS1
+ *   front - Ducati module, ST VS6955 die (0x0016 = 0x03bb)
+ *           CCI master 0, slave 0x20, CSIPHY2/CSID2, MCLK2
+ *           reset GPIO 104, standby GPIO 105
+ *           VANA L17 2.8 V, VIO LVS1
+ *
+ * The front sensor keeps cell-index 1 because the camera HAL expects slot 1
+ * for the front camera; only the PHY/CSID indexes point at CSI2.
+ *
+ * Both sensors use a 9.6 MHz MCLK (DSDT). The power sequence actually used
+ * at probe time is sent by the userspace sensor library; the sequence below
+ * documents the order and is used by the legacy/EEPROM paths.
+ *
+ * EEPROM nodes are left out: their CCI addresses on the Lumia modules are
+ * not known yet.
+ */
+
+&soc {
+	led_flash0: qcom,camera-flash {
+		cell-index = <0>;
+		compatible = "qcom,camera-flash";
+		qcom,flash-type = <1>;
+		qcom,flash-source = <&pmi8994_flash0 &pmi8994_flash1>;
+		qcom,torch-source = <&pmi8994_torch0 &pmi8994_torch1>;
+	};
+};
+
+&cci {
+	/*
+	 * AF and OIS drivers live inside the rear module, so they share the
+	 * rear sensor's CCI master. Their slave addresses come from the
+	 * userspace libraries.
+	 */
+	actuator0: qcom,actuator@0 {
+		cell-index = <0>;
+		reg = <0x0>;
+		compatible = "qcom,actuator";
+		qcom,cci-master = <1>;
+		cam_vaf-supply = <&pm8994_l23>;
+		qcom,cam-vreg-name = "cam_vaf";
+		qcom,cam-vreg-min-voltage = <2850000>;
+		qcom,cam-vreg-max-voltage = <2850000>;
+		qcom,cam-vreg-op-mode = <80000>;
+	};
+
+	ois0: qcom,ois@0 {
+		cell-index = <0>;
+		reg = <0x0>;
+		compatible = "qcom,ois";
+		qcom,cci-master = <1>;
+		cam_vaf-supply = <&pm8994_l23>;
+		qcom,cam-vreg-name = "cam_vaf";
+		qcom,cam-vreg-min-voltage = <2850000>;
+		qcom,cam-vreg-max-voltage = <2850000>;
+		qcom,cam-vreg-op-mode = <80000>;
+	};
+
+	/* Rear: Carrera / IMX230 */
+	qcom,camera@0 {
+		cell-index = <0>;
+		compatible = "qcom,camera";
+		reg = <0x0>;
+		qcom,csiphy-sd-index = <0>;
+		qcom,csid-sd-index = <0>;
+		qcom,mount-angle = <270>;
+		qcom,actuator-src = <&actuator0>;
+		qcom,ois-src = <&ois0>;
+		qcom,led-flash-src = <&led_flash0>;
+		cam_vaf-supply = <&pm8994_l23>;
+		cam_vana-supply = <&pm8994_l29>;
+		cam_vdig-supply = <&pm8994_l25>;
+		cam_vio-supply = <&pm8994_lvs1>;
+		qcom,cam-vreg-name = "cam_vaf", "cam_vana", "cam_vdig", "cam_vio";
+		qcom,cam-vreg-min-voltage = <2850000 2850000 1150000 0>;
+		qcom,cam-vreg-max-voltage = <2850000 2850000 1150000 0>;
+		qcom,cam-vreg-op-mode = <80000 80000 80000 0>;
+		qcom,cam-power-seq-type = "sensor_vreg", "sensor_vreg",
+					  "sensor_vreg", "sensor_vreg",
+					  "sensor_gpio", "sensor_gpio",
+					  "sensor_clk";
+		qcom,cam-power-seq-val = "cam_vaf", "cam_vana", "cam_vdig",
+					 "cam_vio", "sensor_gpio_reset",
+					 "sensor_gpio_standby",
+					 "sensor_cam_mclk";
+		qcom,cam-power-seq-cfg-val = <1 1 1 1 1 1 9600000>;
+		qcom,cam-power-seq-delay = <1 1 1 1 30 30 5>;
+		qcom,gpio-no-mux = <0>;
+		pinctrl-names = "cam_default", "cam_suspend";
+		pinctrl-0 = <&cam_sensor_mclk0_active &cam_sensor_rear_active>;
+		pinctrl-1 = <&cam_sensor_mclk0_suspend &cam_sensor_rear_suspend>;
+		gpios = <&msm_gpio 13 0>,
+			<&msm_gpio 92 0>,
+			<&msm_gpio 91 0>;
+		qcom,gpio-reset = <1>;
+		qcom,gpio-standby = <2>;
+		qcom,gpio-req-tbl-num = <0 1 2>;
+		qcom,gpio-req-tbl-flags = <1 0 0>;
+		qcom,gpio-req-tbl-label = "CAMIF_MCLK0",
+					  "CAM_RESET0",
+					  "CAM_STANDBY0";
+		qcom,sensor-position = <0>;
+		qcom,sensor-mode = <0>;
+		qcom,cci-master = <1>;
+		status = "ok";
+		clocks = <&clock_mmss clk_mclk0_clk_src>,
+			 <&clock_mmss clk_camss_mclk0_clk>;
+		clock-names = "cam_src_clk", "cam_clk";
+	};
+
+	/* Front: Ducati / VS6955, wired to CSI2 */
+	qcom,camera@1 {
+		cell-index = <1>;
+		compatible = "qcom,camera";
+		reg = <0x1>;
+		qcom,csiphy-sd-index = <2>;
+		qcom,csid-sd-index = <2>;
+		qcom,mount-angle = <90>;
+		cam_vana-supply = <&pm8994_l17>;
+		cam_vio-supply = <&pm8994_lvs1>;
+		qcom,cam-vreg-name = "cam_vana", "cam_vio";
+		qcom,cam-vreg-min-voltage = <2800000 0>;
+		qcom,cam-vreg-max-voltage = <2800000 0>;
+		qcom,cam-vreg-op-mode = <300000 0>;
+		qcom,cam-power-seq-type = "sensor_vreg", "sensor_vreg",
+					  "sensor_gpio", "sensor_gpio",
+					  "sensor_clk";
+		qcom,cam-power-seq-val = "cam_vana", "cam_vio",
+					 "sensor_gpio_reset",
+					 "sensor_gpio_standby",
+					 "sensor_cam_mclk";
+		qcom,cam-power-seq-cfg-val = <1 1 1 1 9600000>;
+		qcom,cam-power-seq-delay = <1 1 30 30 5>;
+		qcom,gpio-no-mux = <0>;
+		pinctrl-names = "cam_default", "cam_suspend";
+		pinctrl-0 = <&cam_sensor_mclk2_active &cam_sensor_front_active>;
+		pinctrl-1 = <&cam_sensor_mclk2_suspend &cam_sensor_front_suspend>;
+		gpios = <&msm_gpio 15 0>,
+			<&msm_gpio 104 0>,
+			<&msm_gpio 105 0>;
+		qcom,gpio-reset = <1>;
+		qcom,gpio-standby = <2>;
+		qcom,gpio-req-tbl-num = <0 1 2>;
+		qcom,gpio-req-tbl-flags = <1 0 0>;
+		qcom,gpio-req-tbl-label = "CAMIF_MCLK2",
+					  "CAM_RESET_FRONT",
+					  "CAM_STANDBY_FRONT";
+		qcom,sensor-position = <1>;
+		qcom,sensor-mode = <0>;
+		qcom,cci-master = <0>;
+		status = "ok";
+		clocks = <&clock_mmss clk_mclk2_clk_src>,
+			 <&clock_mmss clk_camss_mclk2_clk>;
+		clock-names = "cam_src_clk", "cam_clk";
+	};
+};
