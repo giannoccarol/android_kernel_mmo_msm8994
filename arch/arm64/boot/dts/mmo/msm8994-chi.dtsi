@@ -78,6 +78,12 @@
 	status = "ok";
 	qcom,usbin-vadc = <&pmi8994_vadc>;
 	qcom,internal-chg-detect;
+	/*
+	 * No Type-C driver reads the CC current of the USB-C port: let a
+	 * computer port supply up to 1.5 A instead of the 500 mA of USB 2.0.
+	 * The PMI8994 AICL backs off on ports that cannot.
+	 */
+	qcom,default-cc-power-max-ma = <1500>;
  
 	dwc3@f9200000 {
 		maximum-speed = "high-speed";
