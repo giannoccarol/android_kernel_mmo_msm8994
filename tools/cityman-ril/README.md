@@ -5,6 +5,9 @@ base. It is not built or installed by the kernel Makefile. The reference platfor
 is Lumia 950 XL, LineageOS 18.1, existing Qualcomm vendor libraries and qmuxd.
 No vendor binaries, firmware, private logs, SIM identifiers or PINs belong here.
 See `Documentation/arm64/cityman-ril.txt` for the measured coexistence fix.
+For ADSP firmware identity, reproducible extraction and outgoing-call results,
+see `Documentation/arm64/cityman-adsp.txt`. ADSP ONLINE allowed the first call
+to connect, but microphone and received audio remain broken.
 
 ## Verified on hardware
 
@@ -119,8 +122,11 @@ A spontaneous full-phone reboot also occurred after the #37 data test. The owner
 confirmed it was not manual; pstore was empty after reboot, so its cause remains
 unknown. Do not declare long-term stability from these short tests. The #39
 airplane-mode test showed DMS low-power while enabled, then LTE and mobile HTTPS
-returned after disabling airplane mode. No forced-online loop is used. Calls,
-SMS, audio routing, long-duration operation and unplugged suspend are unverified.
+returned after disabling airplane mode. No forced-online loop is used. The owner subsequently confirmed working SMS
+and an outgoing call connecting after the ADSP firmware replacement documented
+in `Documentation/arm64/cityman-adsp.txt`. Microphone and received audio remain
+broken; incoming calls, long-duration operation and unplugged suspend are
+unverified.
 
 `qmi-client-query SERVICE MESSAGE [TLV_HEX [HOLD_SECONDS [POLL_MESSAGE]]]` can
 keep one client open and poll a second request on that same client. Polling is

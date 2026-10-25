@@ -79,7 +79,9 @@ an unexplained spontaneous whole-phone reboot and no retained pstore log;
 that is not attributed to a specific change without further evidence.
 
 These are short functional tests. Extended operation, unplugged suspend,
-calls, SMS, audio routing and Talkman hardware have not been validated.
+incoming calls, audio routing and Talkman hardware have not been validated.
+The owner subsequently confirmed SMS and one outgoing call connecting after
+ADSP firmware replacement; two-way audio remains broken. See cityman-adsp.txt.
 Keep diagnostic logs, SIM/device identifiers and NV backups private. Use a
 backed-up boot and fastboot boot before installing a kernel test. A compiled
 image alone is not hardware validation.

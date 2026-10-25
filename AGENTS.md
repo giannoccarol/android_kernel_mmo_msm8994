@@ -19,13 +19,18 @@
   leaves actual modem power and SSR tracking unchanged; suppressing the DT
   notification alone did not work. RAM #39 passed simultaneous Wi-Fi/LTE data
   and airplane-mode recovery. Installed #39 also passed automatic SIM/LTE and
-  concurrent mobile HTTPS / Wi-Fi traffic. Long-term stability, calls and SMS
-  are unverified.
+  concurrent mobile HTTPS / Wi-Fi traffic. Long-term stability is unverified;
+  subsequent SMS/call results and remaining audio blockers are recorded below.
 - For the measured absent LG VSS NV service, the separate rild-only initializer
   shim preserves its -1 result while skipping the 60-second timeout on Cityman.
   Two installed boots passed; the owner confirmed a rapid PIN prompt. Keep the
   original vendor NV library intact and retain forwarding on unknown boards.
 - Never force DMS online periodically or bypass Android airplane-mode control.
+- SMS work according to the owner's test. The original ADSP firmware failed
+  authentication; replacing the complete set with the signed Cityman artifact
+  brought ADSP ONLINE and allowed an outgoing call to connect. Microphone and
+  received audio remain broken: no soundcard, missing msm-dai-q6-mi2s.3. Read
+  Documentation/arm64/cityman-adsp.txt; do not fake PIL/ADSP readiness in RIL.
 - Never commit toolchains, firmware/vendor binaries, boot images, private logs,
   NV backups or SIM identifiers. Keep raw diagnostics in the surrounding project.
 - Back up and hash before changing device files. Prefer RAM boot tests, retain

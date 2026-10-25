@@ -1,0 +1,83 @@
+Lumia 950 XL (Cityman): signed ADSP firmware and outgoing calls
+============================================================
+
+Observed failure and result (2026-10-25)
+--------------------------------------
+The installed ADSP image was signed for HW_ID 009690E100450000. Its
+adsp.mdt SHA-256 was:
+  fd429b8d5be82717196ca1f9615f81d31a4e7db474aa3893a3267cef196f96fe
+
+PAS_INIT_IMAGE failed (SCM function 0x2000201, ret -2), followed by the
+generic "adsp: Invalid firmware metadata" message. ADSP remained OFFLINE.
+QCRIL's PIL monitor observed state 0; the voice suppression path rejected
+the outgoing DIAL immediately with RIL error 41 (INVALID_STATE). Working
+LTE data and SMS did not establish ADSP or voice readiness. IMS was also
+unregistered, but was not the immediate call blocker in this test.
+
+Replacing the complete ADSP file set with the signed Cityman image below
+and triggering its normal loader authenticated the image, brought ADSP
+ONLINE and logged "adsp: Brought out of reset" and "apr_tal:Q6 Is Up".
+QCRIL's PIL monitor changed from 0 to 1. The next owner-initiated call got
+a successful QMI DIAL response and reached the conversation state; the
+owner confirmed that the remote party answered. No guard was bypassed
+and no IMS, radio property, modem NV or kernel code was changed for this.
+
+Neither microphone nor received audio worked. /proc/asound/cards still
+reported no soundcards; the machine driver deferred with:
+  ASoC: CPU DAI msm-dai-q6-mi2s.3 not registered
+
+This fixes ADSP authentication and the immediate outgoing-call rejection,
+not the audio path. Automatic ADSP startup with these files after reboot,
+incoming calls, repeated calls, VoLTE/IMS registration and sustained audio
+operation have not yet been validated. The measured call was a normal
+VOICE-type call with radio fallback, not proof of VoLTE.
+
+Reproducible source and extraction
+---------------------------------
+Use qcadsp8994.mbn from Android4Lumia950/firmware-microsoft-cityman, commit:
+  f489e275f1d32656c00a289ba57917735edff3bd
+Source:
+  https://github.com/Android4Lumia950/firmware-microsoft-cityman/blob/f489e275f1d32656c00a289ba57917735edff3bd/qcadsp8994.mbn
+Size: 10149719 bytes
+SHA-256:
+  3e101699540296154c1ecaeb3effb7836649e47b72019e90faae341163ea835e
+Signing HW_ID: 009400E100450000; Nokia trustroot KCI 00000526.
+
+No firmware binary is distributed with this kernel change. With the source
+image downloaded separately, run from the kernel source root:
+
+  python3 tools/cityman-ril/split-cityman-adsp.py qcadsp8994.mbn /tmp/cityman-adsp
+  (cd /tmp/cityman-adsp && sha256sum -c sha256sums.txt)
+
+The output directory must not already exist. The tool rejects any input
+whose SHA-256 does not match the verified source. It preserves the original
+ELF headers, segment indices, payloads, load addresses, flags and signatures.
+The .mdt contains the original ELF header segment plus signed hash segment.
+It produces 15 adsp.* files and a SHA-256 manifest. No image contents or
+authentication checks are patched. This extraction is for this measured
+Cityman artifact, not a generic Talkman or Android DSP firmware converter.
+
+Installation and rollback
+-------------------------
+The kernel Makefile and Android.mk do not install this firmware. Device-tree
+integration should copy the complete generated adsp.* set to vendor/firmware
+as firmware data, retaining the basename expected by the existing loader.
+Do not mix it with segment files from another ADSP image.
+
+For a rooted development-device test, first copy and hash every original
+vendor/firmware/adsp.* file off the device. Keep a local manifest and a
+recoverable original set on the device outside the loader's search names.
+Back up before remounting vendor writable; replace the whole active set,
+set root:root / 0644, restore SELinux labels, verify the generated hashes,
+sync and remount vendor read-only. Coordinate with camera/audio testing.
+
+In the measured test ADSP was already OFFLINE after a failed boot load; one
+write of 1 to /sys/kernel/boot_adsp/boot retried the existing normal loader.
+Do not repeatedly boot an already running subsystem or unload active audio
+users. Check its actual name/state under /sys/bus/msm_subsys/devices/*;
+subsysN numbers can change. A file-copy success is not authentication proof.
+
+To roll back, restore the entire backed-up adsp.* set, ownership, permissions
+and labels, then reboot during a coordinated test window. Restoring files
+does not replace an image already running in DSP memory. Keep the known-good
+boot image; this firmware test did not change the boot partition.
