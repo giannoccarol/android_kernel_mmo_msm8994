@@ -8,7 +8,8 @@ an IMX230, so the bullhead libmmcamera_imx377.so is reused as a container and
 these fields are rewritten:
 
   - sensor name "imx377" -> "imx230"
-  - EEPROM, actuator and flash names cleared (the Lumia parts are unknown)
+  - EEPROM and actuator names cleared (the Lumia parts are unknown); the
+    flash stays "pmic": the daemon fails the session without a flash lib
   - slave 0x20, WORD address, ID register 0x0016, expected ID 0x0230
   - power-up order VAF, VANA, VDIG, VIO, reset, standby, MCLK 9.6 MHz,
     matching common/camera-cityman.dtsi
@@ -27,14 +28,13 @@ import hashlib
 import sys
 
 INPUT_SHA256 = "e8aa63374ea4cac20af853afb3a860f5bed9e989de4bb44f6c0cc654fac5bee1"
-OUTPUT_SHA256 = "38d605fcdba58f159861cda0ba93c7b4e7b21025b90da55b522fcd51fb07a9a9"
+OUTPUT_SHA256 = "0bea68225612a1608abff47c2bd475a8126fab38007f9e48426d17cb46c9d27f"
 
 # (offset, original bytes, new bytes), hex encoded
 PATCH = [
     (0x300b, "333737", "323330"),
     (0x3028, "6d323463363473", "00000000000000"),
     (0x3048, "6c633839383231327864", "00000000000000000000"),
-    (0x3088, "706d6963", "00000000"),
     (0x30ac, "34", "20"),
     (0x30b8, "44303200", "16003002"),
     (0x30c4, "00", "03"),
