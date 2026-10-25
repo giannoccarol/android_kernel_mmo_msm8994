@@ -445,6 +445,7 @@ struct msm_pcie_dev_t {
 	struct platform_device	 *pdev;
 	struct pci_dev *dev;
 	struct regulator *gdsc;
+	struct clk *core_reset;
 	struct msm_pcie_vreg_info_t  vreg[MSM_PCIE_MAX_VREG];
 	struct msm_pcie_gpio_info_t  gpio[MSM_PCIE_MAX_GPIO];
 	struct msm_pcie_clk_info_t   clk[MSM_PCIE_MAX_CLK];
@@ -2996,6 +2997,13 @@ static int msm_pcie_get_resources(struct msm_pcie_dev_t *dev,
 	const __be32 *prop;
 	u32 *clkfreq = NULL;
 
+	if (of_property_match_string(pdev->dev.of_node,
+			"clock-names", "core_reset") >= 0) {
+		dev->core_reset = devm_clk_get(&pdev->dev, "core_reset");
+		if (IS_ERR(dev->core_reset))
+			return PTR_ERR(dev->core_reset);
+	}
+
 	cnt = of_property_count_strings((&pdev->dev)->of_node,
 			"clock-names");
 	if (cnt > 0) {
@@ -3279,6 +3287,22 @@ int msm_pcie_enable(struct msm_pcie_dev_t *dev, u32 options)
 		wmb();
 		if (ret)
 			goto clk_fail;
+	}
+
+	/*
+	 * The Lumia bootloader leaves RC1 linked but configuration reads fail
+	 * until its controller block is reset. Preserve the bridge on resume.
+	 */
+	if (dev->core_reset && !dev->enumerated) {
+		ret = clk_reset(dev->core_reset, CLK_RESET_ASSERT);
+		if (ret)
+			goto link_fail;
+		usleep_range(2000, 2500);
+		ret = clk_reset(dev->core_reset, CLK_RESET_DEASSERT);
+		if (ret)
+			goto link_fail;
+		PCIE_INFO(dev, "RC%d: controller core reset complete\n",
+			dev->rc_idx);
 	}
 
 	if (dev->scm_dev_id) {

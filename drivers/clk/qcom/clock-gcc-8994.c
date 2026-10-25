@@ -206,6 +206,7 @@ static DEFINE_VDD_REGULATORS(vdd_dig, VDD_DIG_NUM, 1, vdd_corner, NULL);
 #define PCIE_0_AUX_CMD_RCGR                              (0x1B00)
 #define PCIE_PHY_0_PHY_BCR                               (0x1B14)
 #define PCIE_PHY_0_BCR                                   (0x1B18)
+#define PCIE_1_BCR                                       (0x1B40)
 #define PCIE_1_SLV_AXI_CBCR                              (0x1B48)
 #define PCIE_1_MSTR_AXI_CBCR                             (0x1B4C)
 #define PCIE_1_CFG_AHB_CBCR                              (0x1B50)
@@ -1391,6 +1392,16 @@ static struct reset_clk gcc_pcie_phy_0_reset = {
 		.dbg_name = "gcc_pcie_phy_0_reset",
 		.ops = &clk_ops_rst,
 		CLK_INIT(gcc_pcie_phy_0_reset.c),
+	},
+};
+
+static struct reset_clk gcc_pcie_1_reset = {
+	.reset_reg = PCIE_1_BCR,
+	.base = &virt_base,
+	.c = {
+		.dbg_name = "gcc_pcie_1_reset",
+		.ops = &clk_ops_rst,
+		CLK_INIT(gcc_pcie_1_reset.c),
 	},
 };
 
@@ -2750,6 +2761,7 @@ static struct clk_lookup gcc_clocks_8994_common[] = {
 	CLK_LIST(usb3_phy_aux_clk_src),
 	CLK_LIST(usb_hs_system_clk_src),
 	CLK_LIST(gcc_pcie_phy_0_reset),
+	CLK_LIST(gcc_pcie_1_reset),
 	CLK_LIST(gcc_pcie_phy_1_reset),
 	CLK_LIST(gcc_qusb2_phy_reset),
 	CLK_LIST(gcc_usb3_phy_reset),

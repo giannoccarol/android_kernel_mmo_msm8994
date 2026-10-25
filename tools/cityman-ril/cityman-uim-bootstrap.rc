@@ -1,0 +1,9 @@
+service cityman-uim-bootstrap /vendor/bin/cityman-uim-bootstrap --activate-radio
+    class main
+    user root
+    group radio system inet net_raw log wakelock readproc
+    setenv LD_PRELOAD /vendor/lib64/libcityman_ds_target.so
+    disabled
+
+on property:init.svc.qmuxd=running
+    start cityman-uim-bootstrap

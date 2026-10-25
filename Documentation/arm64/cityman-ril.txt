@@ -1,0 +1,87 @@
+Lumia 950 XL (Cityman): Android SIM, LTE and WLAN coexistence
+==========================================================
+
+Use lineage-18.1-cityman-next and preserve the working RC1 reset / Android
+SGMT WLAN firmware / Lumia calibration described in cityman-wifi.txt.
+The measured firmware is MPSS.BO.2.5 on the stock Lumia boot chain.
+
+Android userspace
+-----------------
+Sources, build and device integration are in tools/cityman-ril. The kernel
+Makefile does not install or enable those services. Qualcomm data processes
+need the msm8994 profile, scoped to qmuxd, netmgrd and ril-daemon via the
+property interposer; changing the global platform property breaks the
+existing graphics stack. DPM then opens the native DATA5_CNTL transport.
+
+The UIM helper activates the primary USIM, waits for the owner to enter a PIN
+through Android, then sends Subscription OK. Its explicit --activate-radio
+mode retains NAS/DMS clients and activates the primary subscription once per
+SIM-ready / Android-radio-online transition. It never sends a PIN, writes NV,
+or forces DMS online. Original RIL/netmgrd manage the data call and IPA path.
+
+Coexistence failure and workaround
+---------------------------------
+With the original Wi-Fi kernel (#30), SIM and LTE data work with Wi-Fi off.
+Enabling WLAN with the modem active reproducibly restarts the modem with:
+
+  coex_qmb.c:230:MCS_CXM assertion enc_rc == QMI_IDL_LIB_NO_ERR && out_buf_len >
+
+This also happens with cnd and cnss-daemon stopped. The modem restart clears
+NAS state, invalidates clients and reinitializes the SIM, accounting for the
+repeated PIN prompts. It is not evidence that the PIN was incorrect.
+
+WMI_MODEM_POWER_STATE_CMDID enables WLAN firmware's WCI-2 UART according to
+the command definition in wmi_unified.h. Removing qcom,notify-modem-status
+from Cityman's DT did not prevent the assertion. Explicitly reporting the
+OFF coexistence state at CNSS probe, powerup and modem notifications did.
+The workaround is limited to mmo,cityman. The real modem_current_status is
+retained, modem power is not changed, and all other boards keep their
+existing notifications. Firmware-assisted WLAN/modem UART coexistence stays
+disabled; compatibility with another firmware pair requires revalidation.
+
+Validation on 2026-10-25
+------------------------
+RAM kernel #39, existing Qualcomm vendor binaries and Lumia calibration:
+
+- UIM helper progressed PIN_REQUIRED -> verified -> READY; Android LOADED.
+- Helper activated NAS without a separate QMI activation command.
+- Android and QMI registered Iliad LTE; original netmgrd assigned rmnet_data0
+  address, gateway and DNS, with no APN or manual interface changes.
+- With Wi-Fi on, HTTPS bound to rmnet_data0 returned 200; WLAN ping passed
+  3/3. Both cnd and cnss-daemon were running, with no modem SSR in this test.
+- Airplane mode reached DMS low-power; LTE and mobile HTTPS returned after
+  disabling it. The helper did not force DMS online.
+
+The same kernel was subsequently installed. Normal boot restored SIM LOADED,
+Iliad LTE and mobile HTTPS 200 automatically, with simultaneous Wi-Fi ping
+3/3 and no modem SSR in the test.
+
+Late PIN prompt
+---------------
+The original LG VSS NV initializer waited 60.021 seconds for an unavailable
+service before returning -1. The optional rild-only libcityman_ril_init.so
+returns the same -1 immediately on SoC 207 / ro.boot.dtb_idx=1, forwarding to
+the original initializer on other or unknown identities. It leaves the
+original NV library intact and does not send QMI or access SIM credentials.
+See tools/cityman-ril/README.md for the scoped preload and rollback.
+
+Two normal boots executed the skip path without the LG retry loop. The owner
+confirmed a rapid PIN prompt on the repeat: polling first observed
+PIN_REQUIRED at uptime 25.04 s, READY at 41.56 s and LOADED at 45.93 s, with
+LTE around 45 s. These are first observations, not exact UI display times.
+Mobile HTTPS returned 200 on both boots. Eight host ELF interposition checks
+and NDK compilation with -Wall -Wextra -Werror passed; full ROM integration
+has not been built.
+
+The EFS/MBA relocation experiment is excluded: LTE and real data also worked
+on installed #30 with its existing memory layout. The RAM #37 experiment had
+an unexplained spontaneous whole-phone reboot and no retained pstore log;
+that is not attributed to a specific change without further evidence.
+
+These are short functional tests. Extended operation, unplugged suspend,
+incoming calls, audio routing and Talkman hardware have not been validated.
+The owner subsequently confirmed SMS and one outgoing call connecting after
+ADSP firmware replacement; two-way audio remains broken. See cityman-adsp.txt.
+Keep diagnostic logs, SIM/device identifiers and NV backups private. Use a
+backed-up boot and fastboot boot before installing a kernel test. A compiled
+image alone is not hardware validation.
