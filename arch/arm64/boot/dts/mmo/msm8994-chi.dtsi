@@ -29,6 +29,7 @@
 #include "common/regulator.dtsi"
 #include "common/gpios.dtsi"
 #include "common/torch.dtsi"
+#include "common/sensors.dtsi"
 
 &mdss_mdp {
 	qcom,mdss-pref-prim-intf = "dsi";
