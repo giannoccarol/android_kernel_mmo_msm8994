@@ -30,6 +30,7 @@
 #include "common/gpios.dtsi"
 #include "common/torch.dtsi"
 #include "common/sensors.dtsi"
+#include "common/nfc.dtsi"
 
 &mdss_mdp {
 	qcom,mdss-pref-prim-intf = "dsi";
