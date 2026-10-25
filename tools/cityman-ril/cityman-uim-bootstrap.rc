@@ -1,0 +1,9 @@
+service cityman-uim-bootstrap /vendor/bin/cityman-uim-bootstrap
+    class main
+    user root
+    group radio system inet net_raw log wakelock readproc
+    setenv LD_PRELOAD /vendor/lib64/libcityman_ds_target.so
+    oneshot
+
+on property:init.svc.qmuxd=running
+    start cityman-uim-bootstrap
