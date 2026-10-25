@@ -15,6 +15,7 @@
 #include "../qcom/msm8994-v2.1.dtsi"
 #include "../qcom/msm8994-pinctrl.dtsi"
 #include "msm8994-chi.dtsi"
+#include "cityman-audio.dtsi"
 
 / {
 	model = "Microsoft Lumia 950 XL";
