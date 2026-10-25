@@ -35,6 +35,14 @@ Eight cores and thermal protection
 - shadowofleaf96: the only other cityman port running eight cores, used for
   comparison; nothing of it is copied here.
 
+Crash logs (pstore)
+-------------------
+- hraj9258 (Himanshu Raj) and sonic011gamer
+  (github.com/hraj9258/android_kernel_mmo_msm8994, talkman-cam-clean):
+  the ramoops region at the top of DDR bank 1 and the pmsg bounce buffer
+  allocated once (b32f68bcb4b, cherry-picked as is). On cityman the board
+  override that moved ramoops elsewhere is dropped so it uses that region.
+
 Not in this branch
 ------------------
 - archienz (github.com/archienz/android_kernel_mmo_msm8994): rear camera
@@ -42,4 +50,4 @@ Not in this branch
   the lineage-18.1-cityman-camera branch.
 - hraj9258 (github.com/hraj9258/android_kernel_mmo_msm8994,
   talkman-cam-clean): talkman rear camera bring-up, under evaluation for
-  cityman.
+  cityman (only the pstore commit above is taken).
