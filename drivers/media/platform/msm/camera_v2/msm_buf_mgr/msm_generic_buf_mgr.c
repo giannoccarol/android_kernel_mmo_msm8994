@@ -45,7 +45,6 @@ static int32_t msm_buf_mngr_get_buf(struct msm_buf_mngr_device *dev,
 	}
 	new_entry->session_id = buf_info->session_id;
 	new_entry->stream_id = buf_info->stream_id;
-	new_entry->index = new_entry->vb2_buf->v4l2_buf.index;
 	spin_lock_irqsave(&dev->buf_q_spinlock, flags);
 	list_add_tail(&new_entry->entry, &dev->buf_qhead);
 	spin_unlock_irqrestore(&dev->buf_q_spinlock, flags);
@@ -102,14 +101,15 @@ static int32_t msm_buf_mngr_buf_done(struct msm_buf_mngr_device *buf_mngr_dev,
 	list_for_each_entry_safe(bufs, save, &buf_mngr_dev->buf_qhead, entry) {
 		if ((bufs->session_id == buf_info->session_id) &&
 			(bufs->stream_id == buf_info->stream_id) &&
-			(bufs->index == buf_info->index)) {
+			(bufs->vb2_buf->v4l2_buf.index == buf_info->index)) {
+			bufs->vb2_buf->v4l2_buf.sequence  = buf_info->frame_id;
+			bufs->vb2_buf->v4l2_buf.flags |= buf_info->flags;
+			bufs->vb2_buf->v4l2_buf.timestamp = buf_info->timestamp;
+			bufs->vb2_buf->v4l2_buf.reserved = buf_info->reserved;
 			ret = buf_mngr_dev->vb2_ops.buf_done
 					(bufs->vb2_buf,
 						buf_info->session_id,
-						buf_info->stream_id,
-						buf_info->frame_id,
-						&buf_info->timestamp,
-						buf_info->reserved);
+						buf_info->stream_id);
 			list_del_init(&bufs->entry);
 			kfree(bufs);
 			break;
@@ -131,7 +131,7 @@ static int32_t msm_buf_mngr_put_buf(struct msm_buf_mngr_device *buf_mngr_dev,
 	list_for_each_entry_safe(bufs, save, &buf_mngr_dev->buf_qhead, entry) {
 		if ((bufs->session_id == buf_info->session_id) &&
 			(bufs->stream_id == buf_info->stream_id) &&
-			(bufs->index == buf_info->index)) {
+			(bufs->vb2_buf->v4l2_buf.index == buf_info->index)) {
 			ret = buf_mngr_dev->vb2_ops.put_buf(bufs->vb2_buf,
 				buf_info->session_id, buf_info->stream_id);
 			list_del_init(&bufs->entry);
@@ -428,6 +428,7 @@ static long msm_buf_mngr_subdev_ioctl(struct v4l2_subdev *sd,
 		rc = msm_buf_mngr_handle_cont_cmd(buf_mngr_dev, argp);
 		break;
 	default:
+		pr_err_ratelimited("unsupported cmd type 0x%x\n", cmd);
 		return -ENOIOCTLCMD;
 	}
 	return rc;
@@ -461,7 +462,7 @@ static long msm_bmgr_subdev_fops_compat_ioctl(struct file *file,
 		cmd = VIDIOC_MSM_BUF_MNGR_CONT_CMD;
 		break;
 	default:
-		pr_debug("%s : unsupported compat type", __func__);
+		pr_err_ratelimited("unsupported compat type 0x%x\n", cmd);
 		return -ENOIOCTLCMD;
 	}
 
@@ -488,7 +489,7 @@ static long msm_bmgr_subdev_fops_compat_ioctl(struct file *file,
 
 		rc = v4l2_subdev_call(sd, core, ioctl, cmd, &buf_info);
 		if (rc < 0) {
-			pr_debug("%s : Subdev cmd %d fail", __func__, cmd);
+			pr_err_ratelimited("Subdev cmd 0x%x fail\n", cmd);
 			return rc;
 		}
 
@@ -517,13 +518,13 @@ static long msm_bmgr_subdev_fops_compat_ioctl(struct file *file,
 			return -EFAULT;
 		rc = v4l2_subdev_call(sd, core, ioctl, cmd, &cont_cmd);
 		if (rc < 0) {
-			pr_debug("%s : Subdev cmd %d fail", __func__, cmd);
+			pr_err_ratelimited("Subdev cmd 0x%x fail\n", cmd);
 			return rc;
 		}
 		}
 		break;
 	default:
-		pr_debug("%s : unsupported compat type", __func__);
+		pr_err_ratelimited("unsupported compat type 0x%x\n", cmd);
 		return -ENOIOCTLCMD;
 		break;
 	}

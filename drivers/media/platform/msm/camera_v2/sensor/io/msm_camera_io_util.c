@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2014, 2019 The Linux Foundataion. All rights reserved.
+/* Copyright (c) 2011-2014, The Linux Foundataion. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -69,7 +69,7 @@ void msm_camera_io_memcpy_toio(void __iomem *dest_addr,
 
 void msm_camera_io_dump(void __iomem *addr, int size)
 {
-	char line_str[BUFF_SIZE_128], *p_str;
+	char line_str[128], *p_str;
 	int i;
 	u32 *p = (u32 *) addr;
 	u32 data;
@@ -78,11 +78,16 @@ void msm_camera_io_dump(void __iomem *addr, int size)
 	p_str = line_str;
 	for (i = 0; i < size/4; i++) {
 		if (i % 4 == 0) {
-			snprintf(p_str, 12, "0x%pK: ",  p);
+#ifdef CONFIG_COMPAT
+			snprintf(p_str, 20, "%016lx: ", (unsigned long) p);
+			p_str += 18;
+#else
+			snprintf(p_str, 12, "%08lx: ", (unsigned long) p);
 			p_str += 10;
+#endif
 		}
 		data = readl_relaxed(p++);
-		snprintf(p_str, 12, "%d ", data);
+		snprintf(p_str, 12, "%08x ", data);
 		p_str += 9;
 		if ((i + 1) % 4 == 0) {
 			CDBG("%s\n", line_str);
@@ -213,13 +218,12 @@ int msm_cam_clk_enable(struct device *dev, struct msm_cam_clk_info *clk_info,
 		}
 	} else {
 		for (i = num_clk - 1; i >= 0; i--) {
-			if (!IS_ERR_OR_NULL(clk_ptr[i])) {
+			if (clk_ptr[i] != NULL) {
 				CDBG("%s disable %s\n", __func__,
 					clk_info[i].clk_name);
 				clk_disable(clk_ptr[i]);
 				clk_unprepare(clk_ptr[i]);
 				clk_put(clk_ptr[i]);
-				clk_ptr[i] = NULL;
 			}
 		}
 	}
@@ -233,11 +237,10 @@ cam_clk_set_err:
 	clk_put(clk_ptr[i]);
 cam_clk_get_err:
 	for (i--; i >= 0; i--) {
-		if (!IS_ERR_OR_NULL(clk_ptr[i])) {
+		if (clk_ptr[i] != NULL) {
 			clk_disable(clk_ptr[i]);
 			clk_unprepare(clk_ptr[i]);
 			clk_put(clk_ptr[i]);
-			clk_ptr[i] = NULL;
 		}
 	}
 	return rc;
@@ -255,12 +258,6 @@ int msm_camera_config_vreg(struct device *dev, struct camera_vreg_t *cam_vreg,
 		pr_err("%s:%d vreg sequence invalid\n", __func__, __LINE__);
 		return -EINVAL;
 	}
-
-	if (cam_vreg == NULL) {
-		pr_err("%s:%d cam_vreg sequence invalid\n", __func__, __LINE__);
-		return -EINVAL;
-	}
-
 	if (!num_vreg_seq)
 		num_vreg_seq = num_vreg;
 

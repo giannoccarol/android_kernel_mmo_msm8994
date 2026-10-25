@@ -17,7 +17,6 @@
 #include <linux/of.h>
 #include <linux/of_gpio.h>
 #include <linux/of_platform.h>
-#include <linux/ratelimit.h>
 #include <media/msm_isp.h>
 #include "msm_sd.h"
 #include "msm_cci.h"
@@ -48,21 +47,22 @@ static struct v4l2_subdev *g_cci_subdev;
 
 static struct msm_cam_clk_info cci_clk_info[CCI_NUM_CLK_CASES][CCI_NUM_CLK_MAX];
 
-static int32_t msm_cci_set_clk_param(struct cci_device *cci_dev,
+static void msm_cci_set_clk_param(struct cci_device *cci_dev,
 	struct msm_camera_cci_ctrl *c_ctrl)
 {
 	struct msm_cci_clk_params_t *clk_params = NULL;
 	enum cci_i2c_master_t master = c_ctrl->cci_info->cci_i2c_master;
 	enum i2c_freq_mode_t i2c_freq_mode = c_ctrl->cci_info->i2c_freq_mode;
-	int32_t rc = 0;
 
-	if ((i2c_freq_mode >= I2C_MAX_MODES) || (i2c_freq_mode < 0)){
-		pr_err("%s:%d Invalid i2c_freq_mode =%d\n",
+	if ((i2c_freq_mode >= I2C_MAX_MODES) || (i2c_freq_mode < 0)) {
+		pr_err("%s:%d invalid i2c_freq_mode %d\n",
 			__func__, __LINE__, i2c_freq_mode);
-		return -EINVAL;
+		return;
 	}
+
 	if (cci_dev->master_clk_init[master])
-		return rc;
+		return;
+
 	clk_params = &cci_dev->cci_clk_params[i2c_freq_mode];
 
 	if (MASTER_0 == master) {
@@ -97,7 +97,7 @@ static int32_t msm_cci_set_clk_param(struct cci_device *cci_dev,
 			cci_dev->base + CCI_I2C_M1_MISC_CTL_ADDR);
 	}
 	cci_dev->master_clk_init[master] = 1;
-	return rc;
+	return;
 }
 
 static void msm_cci_flush_queue(struct cci_device *cci_dev,
@@ -364,6 +364,7 @@ static int32_t msm_cci_i2c_read(struct v4l2_subdev *sd,
 	cci_dev = v4l2_get_subdevdata(sd);
 	master = c_ctrl->cci_info->cci_i2c_master;
 	read_cfg = &c_ctrl->cfg.cci_i2c_read_cfg;
+
 	if (master >= MASTER_MAX || master < 0) {
 		pr_err("%s:%d Invalid I2C master %d\n",
 			__func__, __LINE__, master);
@@ -764,8 +765,8 @@ static struct msm_cam_clk_info *msm_cci_get_clk(struct cci_device *cci_dev,
 	enum i2c_freq_mode_t i2c_freq_mode = c_ctrl->cci_info->i2c_freq_mode;
 	struct device_node *of_node = cci_dev->pdev->dev.of_node;
 
-	if ((i2c_freq_mode >= I2C_MAX_MODES) || (i2c_freq_mode < 0)){
-		pr_err("%s:%d Invalid i2c_freq_mode =%d\n",
+	if ((i2c_freq_mode >= I2C_MAX_MODES) || (i2c_freq_mode < 0)) {
+		pr_err("%s:%d invalid i2c_freq_mode %d\n",
 			__func__, __LINE__, i2c_freq_mode);
 		return NULL;
 	}
@@ -818,12 +819,7 @@ static int32_t msm_cci_init(struct v4l2_subdev *sd,
 		CDBG("%s ref_count %d\n", __func__, cci_dev->ref_count);
 		master = c_ctrl->cci_info->cci_i2c_master;
 		CDBG("%s:%d master %d\n", __func__, __LINE__, master);
-		rc = msm_cci_set_clk_param(cci_dev, c_ctrl);
-		if (rc < 0) {
-			pr_err("%s:%d msm_cci_set_clk_parm failed rc = %d\n",
-				__func__, __LINE__, rc);
-			return rc;
-		}
+		msm_cci_set_clk_param(cci_dev, c_ctrl);
 		if (master < MASTER_MAX && master >= 0) {
 			mutex_lock(&cci_dev->cci_master_info[master].mutex);
 			/* Set reset pending flag to TRUE */
@@ -923,12 +919,7 @@ static int32_t msm_cci_init(struct v4l2_subdev *sd,
 	}
 	for (i = 0; i < MASTER_MAX; i++)
 		cci_dev->master_clk_init[i] = 0;
-	rc = msm_cci_set_clk_param(cci_dev, c_ctrl);
-	if (rc < 0) {
-		pr_err("%s:%d msm_cci_set_clk_parm failed rc = %d\n",
-			__func__, __LINE__, rc);
-		return rc;
-	}
+	msm_cci_set_clk_param(cci_dev, c_ctrl);
 	msm_camera_io_w_mb(CCI_IRQ_MASK_0_RMSK,
 		cci_dev->base + CCI_IRQ_MASK_0_ADDR);
 	msm_camera_io_w_mb(CCI_IRQ_MASK_0_RMSK,
@@ -970,7 +961,7 @@ static int32_t msm_cci_release(struct v4l2_subdev *sd)
 
 	cci_dev = v4l2_get_subdevdata(sd);
 	if (!cci_dev->ref_count || cci_dev->cci_state != CCI_STATE_ENABLED) {
-		pr_err_ratelimited("%s invalid ref count %d / cci state %d\n",
+		pr_err("%s invalid ref count %d / cci state %d\n",
 			__func__, cci_dev->ref_count, cci_dev->cci_state);
 		return -EINVAL;
 	}
@@ -1028,6 +1019,8 @@ static int32_t msm_cci_config(struct v4l2_subdev *sd,
 	case MSM_CCI_GPIO_WRITE:
 		break;
 	default:
+		pr_err_ratelimited("%s:%d unsupported compat type 0x%x\n",
+				__func__, __LINE__, cci_ctrl->cmd);
 		rc = -ENOIOCTLCMD;
 	}
 	CDBG("%s line %d rc %d\n", __func__, __LINE__, rc);
@@ -1123,6 +1116,8 @@ static long msm_cci_subdev_ioctl(struct v4l2_subdev *sd,
 		break;
 	}
 	default:
+		pr_err_ratelimited("%s:%d unsupported compat type 0x%x\n",
+				__func__, __LINE__, cmd);
 		rc = -ENOIOCTLCMD;
 	}
 	CDBG("%s line %d rc %d\n", __func__, __LINE__, rc);
@@ -1407,7 +1402,7 @@ static int msm_cci_get_clk_info(struct cci_device *cci_dev,
 			rc = of_property_read_string_index(of_node,
 				"clock-names", j,
 				&(cci_clk_info[i][j].clk_name));
-			CDBG("%s: clock-names[%d][%d] = %s\n", __func__,
+			pr_err("%s: clock-names[%d][%d] = %s\n", __func__,
 				i, j, cci_clk_info[i][j].clk_name);
 			if (rc < 0) {
 				pr_err("%s:%d, failed\n", __func__, __LINE__);
@@ -1417,7 +1412,7 @@ static int msm_cci_get_clk_info(struct cci_device *cci_dev,
 			cci_clk_info[i][j].clk_rate =
 				(be32_to_cpu(p[index]) == 0) ?
 					(long)-1 : be32_to_cpu(p[index]);
-			CDBG("%s: clk_rate[%d][%d] = %ld\n", __func__, i, j,
+			pr_err("%s: clk_rate[%d][%d] = %ld\n", __func__, i, j,
 				cci_clk_info[i][j].clk_rate);
 			index++;
 		}

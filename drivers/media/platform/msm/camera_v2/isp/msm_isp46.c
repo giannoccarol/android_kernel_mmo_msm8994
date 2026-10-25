@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -42,7 +42,7 @@
 #define VFE46_STATS_BURST_LEN 3
 #define VFE46_UB_SIZE_VFE0 2048
 #define VFE46_UB_SIZE_VFE1 1536
-#define VFE46_UB_STATS_SIZE 144
+#define VFE46_UB_STATS_SIZE 176
 #define MSM_ISP46_TOTAL_IMAGE_UB_VFE0 (VFE46_UB_SIZE_VFE0 - VFE46_UB_STATS_SIZE)
 #define MSM_ISP46_TOTAL_IMAGE_UB_VFE1 (VFE46_UB_SIZE_VFE1 - VFE46_UB_STATS_SIZE)
 #define VFE46_WM_BASE(idx) (0xA0 + 0x24 * idx)
@@ -456,7 +456,7 @@ static void msm_vfe46_process_reg_update(struct vfe_device *vfe_dev,
 				(uint32_t)BIT(i));
 			switch (i) {
 			case VFE_PIX_0:
-				for (j = 0; j < VFE_AXI_SRC_MAX; j++) {
+				for (j = 0; j < MAX_NUM_STREAM; j++) {
 					stream_info =
 						&vfe_dev->axi_data.
 							stream_info[j];
@@ -563,11 +563,6 @@ static void msm_vfe46_reg_update(struct vfe_device *vfe_dev,
 		vfe_dev->reg_update_requested;
 	if ((vfe_dev->is_split && vfe_dev->pdev->id == ISP_VFE1) &&
 		((frame_src == VFE_PIX_0) || (frame_src == VFE_SRC_MAX))) {
-		if (!vfe_dev->dual_vfe_res->vfe_base[ISP_VFE0]) {
-			pr_err("%s vfe_base for ISP_VFE0 is NULL\n", __func__);
-			spin_unlock_irqrestore(&vfe_dev->reg_update_lock, flags);
-			return;
-		}
 		msm_camera_io_w_mb(update_mask,
 			vfe_dev->dual_vfe_res->vfe_base[ISP_VFE0] + 0x3D8);
 		msm_camera_io_w_mb(update_mask,
@@ -633,18 +628,18 @@ static void msm_vfe46_axi_update_cgc_override(struct vfe_device *vfe_dev,
 	msm_camera_io_w_mb(val, vfe_dev->vfe_base + 0x3C);
 }
 
-static void msm_vfe46_axi_enable_wm(void __iomem *vfe_base,
+static void msm_vfe46_axi_enable_wm(struct vfe_device *vfe_dev,
 	uint8_t wm_idx, uint8_t enable)
 {
 	uint32_t val;
 
-	val = msm_camera_io_r(vfe_base + VFE46_WM_BASE(wm_idx));
+	val = msm_camera_io_r(vfe_dev->vfe_base + VFE46_WM_BASE(wm_idx));
 	if (enable)
 		val |= 0x1;
 	else
 		val &= ~0x1;
 	msm_camera_io_w_mb(val,
-		vfe_base + VFE46_WM_BASE(wm_idx));
+		vfe_dev->vfe_base + VFE46_WM_BASE(wm_idx));
 }
 
 static void msm_vfe46_axi_cfg_comp_mask(struct vfe_device *vfe_dev,
@@ -882,10 +877,12 @@ static int msm_vfe46_start_fetch_engine(struct vfe_device *vfe_dev,
 	vfe_dev->fetch_engine_info.session_id = fe_cfg->session_id;
 	vfe_dev->fetch_engine_info.stream_id = fe_cfg->stream_id;
 
+	mutex_lock(&vfe_dev->buf_mgr->lock);
 	rc = vfe_dev->buf_mgr->ops->get_buf_by_index(
 		vfe_dev->buf_mgr, bufq_handle, fe_cfg->buf_idx, &buf);
 	if (rc < 0) {
 		pr_err("%s: No fetch buffer\n", __func__);
+		mutex_unlock(&vfe_dev->buf_mgr->lock);
 		return -EINVAL;
 	}
 	vfe_dev->fetch_engine_info.buf_idx = fe_cfg->buf_idx;
@@ -898,6 +895,7 @@ static int msm_vfe46_start_fetch_engine(struct vfe_device *vfe_dev,
 
 	ISP_DBG("%s:VFE%d Fetch Engine ready\n", __func__, vfe_dev->pdev->id);
 	buf->state = MSM_ISP_BUFFER_STATE_DISPATCHED;
+	mutex_unlock(&vfe_dev->buf_mgr->lock);
 
 	return 0;
 }
@@ -1082,8 +1080,15 @@ static void msm_vfe46_cfg_camif(struct vfe_device *vfe_dev,
 	else
 		bus_sub_en = 0;
 
-	msm_camera_io_w(pix_cfg->input_mux << 5 | pix_cfg->pixel_pattern,
+	if(pix_cfg->camif_cfg.hbi_cnt > 0) {
+		val = pix_cfg->input_mux << 5 | pix_cfg->pixel_pattern;
+		val = val | (uint32_t)(1 << 24);
+		val = val | (uint32_t)(0x03fff00 & (pix_cfg->camif_cfg.hbi_cnt << 8));
+		msm_camera_io_w(val, vfe_dev->vfe_base + 0x50);
+	} else {
+		msm_camera_io_w(pix_cfg->input_mux << 5 | pix_cfg->pixel_pattern,
 		vfe_dev->vfe_base + 0x50);
+	}
 
 	first_pixel = camif_cfg->first_pixel;
 	last_pixel = camif_cfg->last_pixel;
@@ -1757,7 +1762,7 @@ static void msm_vfe46_stats_cfg_ub(struct vfe_device *vfe_dev)
 	uint32_t ub_size[VFE46_NUM_STATS_TYPE] = {
 		16, /* MSM_ISP_STATS_BF_SCALE */
 		16, /* MSM_ISP_STATS_HDR_BE */
-		16, /* MSM_ISP_STATS_BG */
+		48, /* MSM_ISP_STATS_BG */
 		16, /* MSM_ISP_STATS_BF */
 		16, /* MSM_ISP_STATS_HDR_BHIST */
 		16, /* MSM_ISP_STATS_RS */

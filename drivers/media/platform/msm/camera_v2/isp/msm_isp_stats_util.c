@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2015,2017 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -630,18 +630,19 @@ static int msm_isp_start_stats_stream(struct vfe_device *vfe_dev,
 	struct msm_vfe_stats_stream *stream_info;
 	struct msm_vfe_stats_shared_data *stats_data = &vfe_dev->stats_data;
 
-	if (stream_cfg_cmd->num_streams > MSM_ISP_STATS_MAX) {
-		pr_err("%s invalid num_streams %d\n", __func__,
-			stream_cfg_cmd->num_streams);
-		return -EINVAL;
-	}
-
 	num_stats_comp_mask =
 		vfe_dev->hw_info->stats_hw_info->num_stats_comp_mask;
 	rc = vfe_dev->hw_info->vfe_ops.stats_ops.check_streams(
 		stats_data->stream_info);
 	if (rc < 0)
 		return rc;
+
+	if (stream_cfg_cmd->num_streams > MSM_ISP_STATS_MAX) {
+		pr_err("%s invalid num_streams %d\n", __func__,
+			stream_cfg_cmd->num_streams);
+		return -EINVAL;
+	}
+
 	for (i = 0; i < stream_cfg_cmd->num_streams; i++) {
 		idx = STATS_IDX(stream_cfg_cmd->stream_handle[i]);
 
@@ -713,6 +714,12 @@ static int msm_isp_stop_stats_stream(struct vfe_device *vfe_dev,
 	struct msm_vfe_stats_shared_data *stats_data = &vfe_dev->stats_data;
 	num_stats_comp_mask =
 		vfe_dev->hw_info->stats_hw_info->num_stats_comp_mask;
+
+	if (stream_cfg_cmd->num_streams > MSM_ISP_STATS_MAX) {
+		pr_err("%s invalid num_streams %d\n", __func__,
+			stream_cfg_cmd->num_streams);
+		return -EINVAL;
+	}
 
 	for (i = 0; i < stream_cfg_cmd->num_streams; i++) {
 
