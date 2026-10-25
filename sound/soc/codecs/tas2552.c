@@ -50,6 +50,9 @@ struct tas2552_priv {
 	unsigned int sysclk;
 	int enable_gpio;
 	u8 pga_gain;
+	/* "Input Channel Mux" choice, applied each time the DAI is unmuted */
+	unsigned int src_sel;
+	bool unmuted;
 };
 
 static int tas2552_set_pll_clk(struct snd_soc_codec *codec,
@@ -210,8 +213,44 @@ static const SOC_ENUM_SINGLE_DECL(
 
 static const DECLARE_TLV_DB_SCALE(tas2552_vol_tlv, -700, 100, 0);
 
+/*
+ * The source select is cleared while the amplifier powers up and set again
+ * on unmute, so the mixer control only records the choice; the register is
+ * written directly only while the DAI is already running.
+ */
+static int tas2552_src_sel_get(struct snd_kcontrol *kcontrol,
+			       struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct tas2552_priv *tas2552 = snd_soc_codec_get_drvdata(codec);
+
+	ucontrol->value.enumerated.item[0] = tas2552->src_sel;
+	return 0;
+}
+
+static int tas2552_src_sel_put(struct snd_kcontrol *kcontrol,
+			       struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct tas2552_priv *tas2552 = snd_soc_codec_get_drvdata(codec);
+	unsigned int val = ucontrol->value.enumerated.item[0];
+
+	if (val > TAS2552_CONFIG3_SOURCE_SELECT_MAX)
+		return -EINVAL;
+	if (val == tas2552->src_sel)
+		return 0;
+
+	tas2552->src_sel = val;
+	if (tas2552->unmuted)
+		snd_soc_update_bits(codec, TAS2552_REG_CONFIG3,
+				TAS2552_CONFIG3_SOURCE_SELECT_MSK,
+				val << TAS2552_CONFIG3_SOURCE_SELECT_POS);
+	return 1;
+}
+
 static const struct snd_kcontrol_new tas2552_controls[] = {
-	SOC_ENUM("TAS2552 Input Channel Mux", tas2552_src_sel_enum),
+	SOC_ENUM_EXT("TAS2552 Input Channel Mux", tas2552_src_sel_enum,
+		tas2552_src_sel_get, tas2552_src_sel_put),
 	SOC_SINGLE_TLV("TAS2552 Volume", TAS2552_REG_PGA_GAIN,
 		TAS2552_PGA_GAIN_POS, TAS2552_PGA_GAIN_MAX,
 		0, tas2552_vol_tlv),
@@ -372,8 +411,11 @@ static int tas2552_set_fmt(struct snd_soc_dai *codec_dai, unsigned int fmt)
 static int tas2552_digital_mute(struct snd_soc_dai *dai, int mute)
 {
 	struct snd_soc_codec *codec = dai->codec;
+	struct tas2552_priv *tas2552 = snd_soc_codec_get_drvdata(codec);
 
 	dev_dbg(codec->dev, "mute %d\n", mute);
+
+	tas2552->unmuted = !mute;
 
 	snd_soc_update_bits(codec, TAS2552_REG_CONFIG1,
 			TAS2552_CONFIG1_MUTE_MSK,
@@ -384,7 +426,8 @@ static int tas2552_digital_mute(struct snd_soc_dai *dai, int mute)
 		usleep_range(10000, 11000);
 		snd_soc_update_bits(codec, TAS2552_REG_CONFIG3,
 				TAS2552_CONFIG3_SOURCE_SELECT_MSK,
-				TAS2552_CONFIG3_SOURCE_SELECT_MONO);
+				tas2552->src_sel <<
+				TAS2552_CONFIG3_SOURCE_SELECT_POS);
 	}
 
 	return 0;
@@ -489,6 +532,9 @@ static int tas2552_parse_dt(struct device *dev, struct tas2552_priv *tas2552)
 	}
 
 	tas2552->pga_gain = TAS2552_PGA_GAIN_DEFAULT;
+	/* Mono (L+R) unless userspace selects a single channel */
+	tas2552->src_sel = TAS2552_CONFIG3_SOURCE_SELECT_MONO >>
+			   TAS2552_CONFIG3_SOURCE_SELECT_POS;
 	ret = of_property_read_u32(dev->of_node, "ti,pga-gain", &gain);
 	if (!ret) {
 		if (gain > TAS2552_PGA_GAIN_MAX) {

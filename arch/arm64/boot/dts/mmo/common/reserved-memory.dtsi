@@ -3,27 +3,85 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 
+		/*
+		 * ⚠ 0xd9d00000, not 0x070A0000.  The old address sat inside
+		 * `memory_hole`, which meant it needed no carve-out of its own --
+		 * but the Windows-Phone boot chain CLEARS that region, so every
+		 * zone read back sig=0 on the next boot and /sys/fs/pstore was
+		 * empty for the life of the port (S79).  The mainline talkman DT
+		 * puts ramoops at 0xd9d00000 and gets persistent logs there, so
+		 * the top of DDR bank 1 is what survives; `memory_hole` was
+		 * simply the wrong place, not proof that nothing survives.
+		 *
+		 * 0xd9d00000 is 3485 MB, inside bank 1 (/proc/iomem:
+		 * 80000000-dfffffff : System RAM), so unlike the old address this
+		 * one is ORDINARY KERNEL MEMORY and needs a real carve-out --
+		 * hence `linux,remove-completely`, which the old node had
+		 * commented out.  Without it the kernel would allocate these
+		 * pages while ramoops also wrote them.
+		 *
+		 * Bank 0 is 0x00000000-0x5fffffff and bank 1 is
+		 * 0x80000000-0xdfffffff; 0x60000000-0x7fffffff is an address hole
+		 * with no DDR behind it at all.  Do not put anything there.
+		 */
 		ramoops_mem: ramoops_region@0 {
 			linux,reserve-contiguous-region;
 			linux,reserve-region;
-			reg = <0 0x070A0000 0 0x00100000>;
-			//linux,remove-completely;
+			linux,remove-completely;
+			reg = <0 0xd9d00000 0 0x00100000>;
 			label = "ramoops_mem";
 		};
 	};
 };
 
 &soc {
+	/*
+	 * pstore/ramoops.
+	 *
+	 * ⚠ The buffer size must not exceed ramoops_mem above.  It used to say
+	 * 0x200000 against a 0x100000 reservation, and 0x070A0000 + 0x200000
+	 * reaches 0x072A0000 -- past the end of `memory_hole`
+	 * (0x06400000 + 0xe00000 = 0x071FFFFF) and into live System RAM, which
+	 * /proc/iomem shows starting again at 0x07200000.  The sub-sizes did
+	 * not fit either: console 0x100000 + record 0x10000 + ftrace 0x10000 +
+	 * pmsg 0x80000 is 0x1a0000, more than the megabyte reserved.
+	 *
+	 * ramoops_mem sits wholly inside `memory_hole`, which is
+	 * `linux,remove-completely`, so this memory is outside the kernel's
+	 * System RAM entirely -- which is what ramoops wants: nothing else
+	 * allocates it and it survives a warm reset.
+	 *
+	 * Everything below fits in 0x100000 and every size is a power of two
+	 * (ramoops rounds down to one otherwise):
+	 *   console 0x80000 + ftrace 0x10000 + pmsg 0x40000 = 0xd0000
+	 *   leaving 0x30000 of dump records at 0x10000 each = 3 oops records
+	 */
 	ramoops {
 		compatible = "ramoops";
 		status = "ok";
 
-		android,ramoops-buffer-start = <0x070A0000>;
-		android,ramoops-buffer-size = <0x200000>;
-		android,ramoops-console-size = <0x100000>;
+		android,ramoops-buffer-start = <0xd9d00000>;
+		android,ramoops-buffer-size = <0x100000>;
+		android,ramoops-console-size = <0x80000>;
 		android,ramoops-record-size = <0x10000>;
 		android,ramoops-ftrace-size = <0x10000>;
-		android,ramoops-pmsg-size = <0x80000>;
+		/*
+		 * pmsg is back on, at mainline talkman's size.  It was disabled for
+		 * one build because this kernel's write_pmsg() took a vmalloc/vfree
+		 * bounce buffer PER WRITE, and /dev/pmsg0 is liblog's second
+		 * transport -- every log line in every process goes through it.
+		 * Profiled during a 4K30 recording that was 22.77% of all CPU
+		 * cycles (S144).  fs/pstore/pmsg.c now allocates that buffer once at
+		 * registration instead, so the cost is one cache-resident memcpy per
+		 * line.  Re-verified by profile after the change (S146).
+		 *
+		 * Budget check against the 0x100000 reservation:
+		 *   console 0x80000 + record 0x10000 + ftrace 0x10000 + pmsg 0x20000
+		 *   = 0xc0000, leaving 0x40000 for dump records at 0x10000 each.
+		 * Every size is a power of two -- ramoops rounds down to one
+		 * otherwise.
+		 */
+		android,ramoops-pmsg-size = <0x20000>;
 		android,ramoops-dump-oops = <0x1>;
 		linux,contiguous-region = <&ramoops_mem>;
 	};

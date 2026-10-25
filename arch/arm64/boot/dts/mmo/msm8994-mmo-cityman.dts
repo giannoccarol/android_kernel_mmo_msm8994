@@ -15,6 +15,7 @@
 #include "../qcom/msm8994-v2.1.dtsi"
 #include "../qcom/msm8994-pinctrl.dtsi"
 #include "msm8994-chi.dtsi"
+#include "cityman-audio.dtsi"
 
 / {
 	model = "Microsoft Lumia 950 XL";
@@ -26,7 +27,8 @@
 
 /*
  * Keep the stock cityman modem load addresses out of Linux allocations.
- * The common ramoops address overlaps the stock modem image.
+ * ramoops uses the common region at the top of DDR bank 1, clear of the
+ * modem image.
  */
 &modem_mem {
 	reg = <0 0x07000000 0 0x05a00000>;
@@ -34,16 +36,6 @@
 
 &peripheral_mem {
 	reg = <0 0x0ca00000 0 0x01f00000>;
-};
-
-&ramoops_mem {
-	reg = <0 0x0f200000 0 0x00200000>;
-};
-
-&soc {
-	ramoops {
-		android,ramoops-buffer-start = <0x0f200000>;
-	};
 };
 
 /* Reset the controller as well as the PHY before enumerating QCA6174. */
@@ -65,3 +57,5 @@
 		"pcie_1_ldo", "pcie_1_phy_reset", "core_reset";
 	max-clock-frequency-hz = <125000000 0 1011000 0 0 0 0 0 0>;
 };
+
+#include "cityman-thermal.dtsi"

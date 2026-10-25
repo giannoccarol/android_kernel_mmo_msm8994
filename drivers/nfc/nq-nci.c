@@ -64,6 +64,8 @@ struct nqx_dev {
 	bool			nfc_ven_enabled;
 	/* NFC_IRQ state */
 	bool			irq_enabled;
+	/* irq wake armed by nqx_suspend(), to be undone on resume */
+	bool			irq_wake_enabled;
 	bool			cancel_wait;
 	spinlock_t		irq_enabled_lock;
 	unsigned int		count_irq;
@@ -1026,16 +1028,19 @@ static int nqx_suspend(struct device *device)
 	struct nqx_dev *nqx_dev = i2c_get_clientdata(client);
 
 	if (device_may_wakeup(&client->dev) && nqx_dev->irq_enabled)
-		enable_irq_wake(client->irq);
+		nqx_dev->irq_wake_enabled = !enable_irq_wake(client->irq);
 	return 0;
 }
 
 static int nqx_resume(struct device *device)
 {
 	struct i2c_client *client = to_i2c_client(device);
+	struct nqx_dev *nqx_dev = i2c_get_clientdata(client);
 
-	if (device_may_wakeup(&client->dev))
+	if (nqx_dev->irq_wake_enabled) {
 		disable_irq_wake(client->irq);
+		nqx_dev->irq_wake_enabled = false;
+	}
 	return 0;
 }
 

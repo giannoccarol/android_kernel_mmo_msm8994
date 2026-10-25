@@ -66,6 +66,17 @@ static int dload_set(const char *val, struct kernel_param *kp);
 static int download_mode = 1;
 module_param_call(download_mode, dload_set, param_get_int,
 			&download_mode, 0644);
+
+/*
+ * With download mode off, a panic restarts with cmd == NULL and so takes the
+ * PMIC hard reset below, a cold boot that is not meant to keep DDR contents,
+ * so the ramoops record of the panic may not reach the next boot. Ask for a
+ * warm reset instead. It also makes the next boot's PON reason tell a panic
+ * ('warm') from a reset that never went through the panic path ('cold').
+ */
+static bool warm_reset_on_panic = true;
+module_param(warm_reset_on_panic, bool, 0644);
+
 static int panic_prep_restart(struct notifier_block *this,
 			      unsigned long event, void *ptr)
 {
@@ -244,6 +255,11 @@ static void msm_restart_prepare(const char *cmd)
 			strcmp(cmd, "keys clear")))
 			need_warm_reset = true;
 	}
+
+#ifdef CONFIG_MSM_DLOAD_MODE
+	if (in_panic && warm_reset_on_panic)
+		need_warm_reset = true;
+#endif
 
 #ifdef CONFIG_MSM_PRESERVE_MEM
 	need_warm_reset = true;

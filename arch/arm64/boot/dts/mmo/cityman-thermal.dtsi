@@ -1,0 +1,36 @@
+/*
+ * Cityman (Lumia 950 XL, MSM8994 v2.1) CPU thermal limits.
+ *
+ * The CAF limits in msm8994.dtsi assume that userspace thermal-engine
+ * does the regular throttling: once late init switches KTM to interrupt
+ * mode, the kernel only caps the A57 cluster at 95 C, takes a core
+ * offline at 105 C and resets at 115 C, and the bootup polling (one A53
+ * sensor) stops.
+ *
+ * Cityman runs all eight cores and must stay safe when thermal-engine
+ * is missing or crashes, so:
+ *  - KTM keeps polling all eight CPU sensors (A53: tsens 7-10, A57:
+ *    tsens 6 and 13-15) every 250 ms until thermal-engine writes
+ *    enabled=0, and again after enabled=1. From the hottest sensor it
+ *    steps the A57 cluster down one frequency at a time at 75 C and
+ *    back up below 70 C;
+ *  - in interrupt mode, always active after late init, an A57 core
+ *    sensor at 80 C caps the A57 cluster at 1.248 GHz (released below
+ *    70 C), and a core at 95 C goes offline (back below 75 C);
+ *  - the 115 C reset, BCL and LMH limits are unchanged.
+ */
+
+&soc {
+	qcom,msm-thermal {
+		qcom,poll-cpu-sensors;
+		qcom,limit-temp = <75>;
+		qcom,temp-hysteresis = <5>;
+		qcom,freq-step = <1>;
+		qcom,freq-control-mask = <0xf0>;
+		qcom,freq-mitigation-temp = <80>;
+		qcom,freq-mitigation-temp-hysteresis = <10>;
+		qcom,freq-mitigation-value = <1248000>;
+		qcom,hotplug-temp = <95>;
+		qcom,hotplug-temp-hysteresis = <20>;
+	};
+};

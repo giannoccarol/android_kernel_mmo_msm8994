@@ -29,6 +29,8 @@
 #include "common/regulator.dtsi"
 #include "common/gpios.dtsi"
 #include "common/torch.dtsi"
+#include "common/sensors.dtsi"
+#include "common/nfc.dtsi"
 
 &mdss_mdp {
 	qcom,mdss-pref-prim-intf = "dsi";
@@ -78,6 +80,12 @@
 	status = "ok";
 	qcom,usbin-vadc = <&pmi8994_vadc>;
 	qcom,internal-chg-detect;
+	/*
+	 * No Type-C driver reads the CC current of the USB-C port: let a
+	 * computer port supply up to 1.5 A instead of the 500 mA of USB 2.0.
+	 * The PMI8994 AICL backs off on ports that cannot.
+	 */
+	qcom,default-cc-power-max-ma = <1500>;
  
 	dwc3@f9200000 {
 		maximum-speed = "high-speed";
@@ -126,4 +134,13 @@
  
 &pcie1 {
 	/delete-property/ qcom,ep-wakeirq;
+};
+
+/*
+ * The common sdhc include carries the MSM8992 eMMC rates (172/344 MHz).
+ * The MSM8994 SDCC1 clock only provides 192/384 MHz, so HS200/HS400
+ * tuning failed and the card fell back to DDR52.
+ */
+&sdhc_1 {
+	qcom,clk-rates = <400000 20000000 25000000 50000000 100000000 192000000 384000000>;
 };
