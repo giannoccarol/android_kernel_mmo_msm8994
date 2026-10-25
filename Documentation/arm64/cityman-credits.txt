@@ -1,0 +1,45 @@
+Lumia 950 XL (cityman) kernel: credits
+======================================
+
+This branch (lineage-18.1-cityman-rom) is the Android4Lumia950 commonized
+MSM8994 kernel with Lumia 950 XL changes on top. Work from others that it
+uses, and where it comes from:
+
+Base
+----
+- Android4Lumia950 (djokcho, EpicLPer, j0sh1x and the community):
+  android_kernel_mmo_msm8994, the talkman/cityman device trees, the
+  charging, USB and Bluetooth UART fixes it already carried.
+- Code Aurora Forum / Qualcomm: the MSM8994 kernel, msm_thermal (KTM), BCL
+  and the default KTM limits.
+
+Audio (speaker, earpiece, calls)
+--------------------------------
+- EpicLPer (Android4Lumia950, talkman): the TAS2552/TAS2553 speaker
+  amplifier driver and the Quaternary MI2S wiring (e4d0c025066,
+  9bd1bb032d4, 22039ccd1ea, 5b52570b88d), and the AP-side sensor I2C buses
+  (7d96420fc1e).
+- shadowofleaf96 (github.com/shadowofleaf96/android_kernel_msft_cityman):
+  the cityman Q6 MI2S node, the unused WCD9330 speaker supplies and the
+  ASM open without an ACDB topology (efb1ebf, 1a51144), the MSM8994 eMMC
+  clock rates (4bc7ab2), the sensor and NFC includes for cityman (cd01dc9,
+  386e7a0) and the nq-nci resume fix (628c06f).
+
+Eight cores and thermal protection
+----------------------------------
+- Huawei/Google, angler (Nexus 6P) and LineageOS, OnePlus 2
+  (LineageOS/android_kernel_oneplus_msm8994): the MSM8994 KTM limits and the
+  eight-core bring-up order used as reference.
+- Sony (sonyxperiadev, Kitakami): the A53/A57 sensor map and the A57 steps
+  used as reference.
+- shadowofleaf96: the only other cityman port running eight cores, used for
+  comparison; nothing of it is copied here.
+
+Not in this branch
+------------------
+- archienz (github.com/archienz/android_kernel_mmo_msm8994): rear camera
+  measurements on the Lumia 950 (CSI lane map 0x0423, 24 MHz MCLK), used on
+  the lineage-18.1-cityman-camera branch.
+- hraj9258 (github.com/hraj9258/android_kernel_mmo_msm8994,
+  talkman-cam-clean): talkman rear camera bring-up, under evaluation for
+  cityman.
