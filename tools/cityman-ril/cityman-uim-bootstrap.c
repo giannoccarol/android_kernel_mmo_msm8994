@@ -61,7 +61,7 @@ int main(int argc,char **argv)
  release_fn release=(release_fn)dlsym(cci,"qmi_client_release");
  void *object=dlsym(services,"uim_qmi_idl_service_object_v01"),*client=NULL;
  if(!init||!send_raw||!release||!object)return 1;
- union {max_align_t align;uint8_t bytes[1024];} params[3]={0};
+ union {long double align;uint8_t bytes[1024];} params[3]={0};
  void *nas=NULL,*dms=NULL;
  void *nas_object=dlsym(services,"nas_qmi_idl_service_object_v01");
  void *dms_object=dlsym(services,"dms_qmi_idl_service_object_v01");
