@@ -18,7 +18,13 @@
   coex_qmb.c:230 modem SSR seen with the incompatible WCI-2 UART exchange. This
   leaves actual modem power and SSR tracking unchanged; suppressing the DT
   notification alone did not work. RAM #39 passed simultaneous Wi-Fi/LTE data
-  and airplane-mode recovery. Long-term stability, calls and SMS are unverified.
+  and airplane-mode recovery. Installed #39 also passed automatic SIM/LTE and
+  concurrent mobile HTTPS / Wi-Fi traffic. Long-term stability, calls and SMS
+  are unverified.
+- For the measured absent LG VSS NV service, the separate rild-only initializer
+  shim preserves its -1 result while skipping the 60-second timeout on Cityman.
+  Two installed boots passed; the owner confirmed a rapid PIN prompt. Keep the
+  original vendor NV library intact and retain forwarding on unknown boards.
 - Never force DMS online periodically or bypass Android airplane-mode control.
 - Never commit toolchains, firmware/vendor binaries, boot images, private logs,
   NV backups or SIM identifiers. Keep raw diagnostics in the surrounding project.

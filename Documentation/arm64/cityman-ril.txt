@@ -52,6 +52,27 @@ RAM kernel #39, existing Qualcomm vendor binaries and Lumia calibration:
 - Airplane mode reached DMS low-power; LTE and mobile HTTPS returned after
   disabling it. The helper did not force DMS online.
 
+The same kernel was subsequently installed. Normal boot restored SIM LOADED,
+Iliad LTE and mobile HTTPS 200 automatically, with simultaneous Wi-Fi ping
+3/3 and no modem SSR in the test.
+
+Late PIN prompt
+---------------
+The original LG VSS NV initializer waited 60.021 seconds for an unavailable
+service before returning -1. The optional rild-only libcityman_ril_init.so
+returns the same -1 immediately on SoC 207 / ro.boot.dtb_idx=1, forwarding to
+the original initializer on other or unknown identities. It leaves the
+original NV library intact and does not send QMI or access SIM credentials.
+See tools/cityman-ril/README.md for the scoped preload and rollback.
+
+Two normal boots executed the skip path without the LG retry loop. The owner
+confirmed a rapid PIN prompt on the repeat: polling first observed
+PIN_REQUIRED at uptime 25.04 s, READY at 41.56 s and LOADED at 45.93 s, with
+LTE around 45 s. These are first observations, not exact UI display times.
+Mobile HTTPS returned 200 on both boots. Eight host ELF interposition checks
+and NDK compilation with -Wall -Wextra -Werror passed; full ROM integration
+has not been built.
+
 The EFS/MBA relocation experiment is excluded: LTE and real data also worked
 on installed #30 with its existing memory layout. The RAM #37 experiment had
 an unexplained spontaneous whole-phone reboot and no retained pstore log;

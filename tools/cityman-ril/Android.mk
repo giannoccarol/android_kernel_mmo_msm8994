@@ -11,6 +11,15 @@ LOCAL_VENDOR_MODULE := true
 LOCAL_MULTILIB := 64
 include $(BUILD_SHARED_LIBRARY)
 
+# Cityman vendor stack: preload only in rild, after verifying the LG timeout.
+include $(CLEAR_VARS)
+LOCAL_MODULE := libcityman_ril_init
+LOCAL_SRC_FILES := cityman-ril-init.c
+LOCAL_SHARED_LIBRARIES := libdl liblog
+LOCAL_VENDOR_MODULE := true
+LOCAL_MULTILIB := 64
+include $(BUILD_SHARED_LIBRARY)
+
 include $(CLEAR_VARS)
 LOCAL_MODULE := cityman-uim-bootstrap
 LOCAL_SRC_FILES := cityman-uim-bootstrap.c

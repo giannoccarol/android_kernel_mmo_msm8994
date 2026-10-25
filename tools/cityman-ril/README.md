@@ -40,6 +40,44 @@ option to each of qmuxd, netmgrd and ril-daemon in the device's init sources:
     setenv LD_PRELOAD /vendor/lib64/libcityman_ds_target.so
 ```
 
+## RIL startup / late PIN
+
+The saved startup trace shows `libvss_nv_core.so` waiting 60.021 seconds for
+the LG VSS NV service, then logging that the service is absent and returning -1.
+The existing QCRIL calls its exported `qcci_qmi_vs_nv_init` through a PLT entry.
+This is separate from standard UIM, NAS, DMS, WDS and modem NV storage.
+
+`libcityman_ril_init.so` interposes only that initializer. With SoC ID 207 and
+the exact boot property `ro.boot.dtb_idx=1`, it returns the same -1 immediately;
+other/unknown identities forward to the original initializer. It does not
+pretend that LG NV initialized successfully, patch vendor binaries, send QMI,
+or read/write SIM credentials or NV. Boot properties avoid relying on root-only
+`/proc/cmdline` from rild's radio UID.
+
+For this Cityman vendor stack, add `libcityman_ril_init` to PRODUCT_PACKAGES
+and use this rild-only init option (keep the existing data profile shim):
+
+```rc
+    setenv LD_PRELOAD /vendor/lib64/libcityman_ril_init.so:/vendor/lib64/libcityman_ds_target.so
+```
+
+Do not add the NV initializer shim to qmuxd, netmgrd or a global preload. It is
+verified on two normal installed boots: the skip log appeared, the original
+60-second LG retry loop did not, and SIM LOADED / Iliad LTE returned. Mobile
+HTTPS and Wi-Fi traffic passed together after both boots. On the repeat
+boot the owner confirmed a rapid PIN prompt. The log clock changed during
+startup, so an exact before/after UI latency is not established. Restore the
+original rild init option and reboot to roll back; the vendor NV library itself
+remains untouched.
+
+`python3 tools/cityman-ril/test-ril-init.py` performs eight host ELF interposition
+checks using fake vendor exports and boot-property fixtures, including forwarding
+on unknown/non-Cityman identities and leaving the vendor path unchanged without
+preload. NDK r27c builds with `-Wall -Wextra -Werror` also pass. Neither is a
+substitute for measuring Android boot and verifying LTE/Wi-Fi afterward.
+
+## UIM and radio helper
+
 The helper is Cityman-gated and does not enter a PIN. Its `--observe-only` option
 does not activate/publish the SIM. Without options it exits at READY. The init
 service uses `--activate-radio`: it stays alive, enables the primary NAS
@@ -52,7 +90,7 @@ SoC 207, the exact boot token `androidboot.dtb_idx=1`, and the scoped shim.
 Support for multiple applications/cards and hotplug is not established. Recovery
 after sustained modem failures needs further validation. Do not enable on Talkman.
 
-## Registration and data: conditional hardware result
+## Registration and data: hardware results
 
 On both the RAM-only EFS-layout test kernel #37 and the unchanged installed
 Wi-Fi kernel #30, the following diagnostic sequence registered to Iliad LTE:
@@ -73,7 +111,9 @@ Suppressing the notification in DT did not fix it. Explicitly sending the OFF
 coexistence state to WLAN firmware on Cityman did: the #39 RAM test maintained
 Iliad LTE and Wi-Fi simultaneously, mobile-interface HTTPS returned HTTP 200,
 Wi-Fi ping passed 3/3, and no modem SSR appeared. Both cnd and cnss-daemon were
-running. The actual modem remains on and its SSR tracking is unchanged.
+running. The actual modem remains on and its SSR tracking is unchanged. The
+same kernel was then installed: a normal boot automatically restored SIM LOADED
+and Iliad LTE, with concurrent mobile HTTPS 200 and Wi-Fi ping 3/3 and no SSR.
 
 A spontaneous full-phone reboot also occurred after the #37 data test. The owner
 confirmed it was not manual; pstore was empty after reboot, so its cause remains
@@ -95,9 +135,9 @@ replacement for Android's transport or data stack:
 
 The pmOS sequence includes NAS primary activation, mode preference, DMS online,
 then AT CFUN=0/1 and automatic network selection. Its AT commands use a separate
-AT endpoint; they are not raw QMI messages. Android equivalents remain to be
-validated with qmuxd for QMI and the confirmed DS AT port, then netmgrd/IPA/WDS
-for data. Do not substitute pmOS `/dev/wwan0qmi0`, raw readers of smdcntl0, or
+AT endpoint; they are not raw QMI messages. The verified Android path here uses UIM readiness, NAS primary activation
+and Android radio power control, then the original netmgrd/IPA/WDS for data;
+AT CFUN cycling is not required for this measured result. Do not substitute pmOS `/dev/wwan0qmi0`, raw readers of smdcntl0, or
 unverified AT-over-QMI messages.
 
 The RAM-only #37 experiment boots MBA at 0x06300000 and metadata at
