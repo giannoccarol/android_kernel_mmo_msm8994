@@ -6,6 +6,7 @@ LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 LOCAL_MODULE := libcityman_ds_target
 LOCAL_SRC_FILES := cityman-ds-target.c
+LOCAL_CFLAGS := -Wall -Wextra -Werror
 LOCAL_SHARED_LIBRARIES := libdl
 LOCAL_VENDOR_MODULE := true
 LOCAL_MULTILIB := 64
@@ -15,6 +16,7 @@ include $(BUILD_SHARED_LIBRARY)
 include $(CLEAR_VARS)
 LOCAL_MODULE := libcityman_ril_init
 LOCAL_SRC_FILES := cityman-ril-init.c
+LOCAL_CFLAGS := -Wall -Wextra -Werror
 LOCAL_SHARED_LIBRARIES := libdl liblog
 LOCAL_VENDOR_MODULE := true
 LOCAL_MULTILIB := 64
@@ -23,6 +25,7 @@ include $(BUILD_SHARED_LIBRARY)
 include $(CLEAR_VARS)
 LOCAL_MODULE := cityman-uim-bootstrap
 LOCAL_SRC_FILES := cityman-uim-bootstrap.c
+LOCAL_CFLAGS := -Wall -Wextra -Werror
 LOCAL_SHARED_LIBRARIES := libdl liblog
 LOCAL_INIT_RC := cityman-uim-bootstrap.rc
 LOCAL_VENDOR_MODULE := true
