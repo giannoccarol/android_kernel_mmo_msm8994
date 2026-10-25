@@ -558,8 +558,13 @@ int msm_sensor_match_id(struct msm_sensor_ctrl_t *s_ctrl)
 		return rc;
 	}
 
-	CDBG("%s: read id: 0x%x expected id 0x%x:\n", __func__, chipid,
-		slave_info->sensor_id);
+	/*
+	 * Log every ID read: the sensor libraries are matched by hand on
+	 * cityman, and CDBG is compiled out.
+	 */
+	pr_info("%s: %s read id 0x%x expected 0x%x slave 0x%x\n", __func__,
+		sensor_name, chipid, slave_info->sensor_id,
+		slave_info->sensor_slave_addr);
 	if (msm_sensor_id_by_mask(s_ctrl, chipid) != slave_info->sensor_id) {
 		pr_err("msm_sensor_match_id chip id doesnot match\n");
 		return -ENODEV;
