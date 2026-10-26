@@ -3356,6 +3356,22 @@ static int ext4_reserve_clusters(struct ext4_sb_info *sbi, ext4_fsblk_t count)
 	return 0;
 }
 
+/*
+ * The project ID backport added i_projid to struct ext4_inode. Only ask
+ * for those 4 bytes when the project feature is enabled: otherwise every
+ * inode of an existing filesystem gets expanded from
+ * ext4_mark_inode_dirty(), and when that happens under ext4_truncate()
+ * the xattr block allocation takes i_data_sem again and the task
+ * deadlocks with the journal handle open.
+ */
+static unsigned int ext4_default_extra_isize(struct super_block *sb)
+{
+	if (EXT4_HAS_RO_COMPAT_FEATURE(sb, EXT4_FEATURE_RO_COMPAT_PROJECT))
+		return sizeof(struct ext4_inode) - EXT4_GOOD_OLD_INODE_SIZE;
+	return offsetof(struct ext4_inode, i_projid) -
+		EXT4_GOOD_OLD_INODE_SIZE;
+}
+
 static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 {
 	char *orig_data = kstrdup(data, GFP_KERNEL);
@@ -4117,8 +4133,7 @@ no_journal:
 
 	/* determine the minimum size of new large inodes, if present */
 	if (sbi->s_inode_size > EXT4_GOOD_OLD_INODE_SIZE) {
-		sbi->s_want_extra_isize = sizeof(struct ext4_inode) -
-						     EXT4_GOOD_OLD_INODE_SIZE;
+		sbi->s_want_extra_isize = ext4_default_extra_isize(sb);
 		if (EXT4_HAS_RO_COMPAT_FEATURE(sb,
 				       EXT4_FEATURE_RO_COMPAT_EXTRA_ISIZE)) {
 			if (sbi->s_want_extra_isize <
@@ -4134,8 +4149,7 @@ no_journal:
 	/* Check if enough inode space is available */
 	if (EXT4_GOOD_OLD_INODE_SIZE + sbi->s_want_extra_isize >
 							sbi->s_inode_size) {
-		sbi->s_want_extra_isize = sizeof(struct ext4_inode) -
-						       EXT4_GOOD_OLD_INODE_SIZE;
+		sbi->s_want_extra_isize = ext4_default_extra_isize(sb);
 		ext4_msg(sb, KERN_INFO, "required extra inode space not"
 			 "available");
 	}
