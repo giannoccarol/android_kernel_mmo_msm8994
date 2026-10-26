@@ -160,3 +160,29 @@ A reboot leaves a RAM test kernel and returns to the installed boot. Restore the
 original qmuxd/netmgrd/ril-daemon init files and remove the helper init file to
 disable userspace integration. Do not erase or restore modemst/fsg/fsc partitions
 as a transport or registration workaround.
+
+## Revision of 2026-10-26 (branch test/cityman-ril-improve, not yet built)
+
+- `cityman-uim-bootstrap.c` rewritten for review: named QMI message IDs, TLV
+  offsets and states, kernel style.
+- The card status parser walks every slot and application and picks the USIM
+  the primary GW index names, or the first USIM on a present card. Multi-app
+  cards (USIM + ISIM/CSIM) and dual-SIM layouts no longer stall silently;
+  "No present USIM application" is logged once.
+- Provisioning (0x0038) and Subscription OK (0x0040) are retried at most three
+  times (5/15/45 s backoff), then only observed until the USIM state changes.
+  Re-sending 0x0038 in a loop resets the SMD channel and drops the SIM.
+- Once the radio subscription is handled and the state is stable, the helper
+  polls every 30 s instead of 5 s. A failing DMS/NAS request reopens those
+  clients instead of exiting.
+- The helper runs as `radio` instead of root. All helpers share
+  `cityman-detect.h`: `ro.boot.hardware=cityman`, or soc_id 207 with
+  `ro.boot.dtb_idx=1`.
+- `libcityman_ds_target` also answers `__system_property_get()`;
+  `__system_property_read_callback()` readers remain uncovered.
+- Host tests: `test-ril-init.py` (10 checks) and `test-uim-parse.py` (9 parser
+  checks).
+
+Open: on boot the PIN prompt appears a second time after a correct PIN and
+then clears by itself. Check the radio log for the order of PIN verify,
+Subscription OK and the next card status before changing the sequence.

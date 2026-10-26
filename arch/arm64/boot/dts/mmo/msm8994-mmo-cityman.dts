@@ -59,3 +59,8 @@
 };
 
 #include "cityman-thermal.dtsi"
+
+/* The stock MPSS asserts in coex_qmb.c with the WLAN WCI-2 coexistence on. */
+&cnss {
+	qcom,wlan-no-modem-coex;
+};

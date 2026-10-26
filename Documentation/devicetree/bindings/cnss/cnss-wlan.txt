@@ -22,6 +22,9 @@ Required properties:
 Optional properties:
   - qcom,notify-modem-status: Boolean property to decide whether modem
     notification should be enabled or not in this platform
+  - qcom,wlan-no-modem-coex: Boolean property; always report the modem as
+    off to the WLAN firmware, so that the WLAN/modem coexistence interface
+    stays off, for modems that reject that protocol
   - wlan-soc-swreg-supply: phandle to the external 1.15V regulator for QCA6174
   - qcom,wlan-uart-access: Boolean property to decide whether QCA6174
     has exclusive access to UART.

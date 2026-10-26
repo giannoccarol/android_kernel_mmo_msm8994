@@ -32,8 +32,12 @@ def main():
 extern int qcci_qmi_vs_nv_init(void);
 int __system_property_get(const char *name, char *out)
 {
-    const char *value = getenv("CITYMAN_TEST_DTB_IDX");
-    if (strcmp(name, "ro.boot.dtb_idx") || !value || strlen(value) >= 92) {
+    const char *value = NULL;
+    if (!strcmp(name, "ro.boot.dtb_idx"))
+        value = getenv("CITYMAN_TEST_DTB_IDX");
+    else if (!strcmp(name, "ro.boot.hardware"))
+        value = getenv("CITYMAN_TEST_HARDWARE");
+    if (!value || strlen(value) >= 92) {
         out[0] = 0;
         return 0;
     }
@@ -60,6 +64,8 @@ int main(void) { printf("result=%d\n", qcci_qmi_vs_nv_init()); return 0; }
             "-L", str(work), "-lvss_nv_core", "-o", str(driver))
 
         cases = [
+            ("Cityman ROM hardware property is enough", None, None, True, -1, "cityman"),
+            ("other hardware property falls back to SoC check", "251\n", "1", True, 42, "talkman"),
             ("Cityman preserves unavailable result", "207\n", "1", True, -1),
             ("different SoC forwards vendor init", "251\n", "1", True, 42),
             ("different DT index forwards", "207\n", "2", True, 42),
@@ -69,7 +75,7 @@ int main(void) { printf("result=%d\n", qcci_qmi_vs_nv_init()); return 0; }
             ("missing SoC file forwards", None, "1", True, 42),
             ("not preloaded leaves vendor unchanged", "207\n", "1", False, 42),
         ]
-        for label, soc_value, index, preload, expected in cases:
+        for label, soc_value, index, preload, expected, *hardware in cases:
             if soc_value is None:
                 soc.unlink(missing_ok=True)
             else:
@@ -78,6 +84,9 @@ int main(void) { printf("result=%d\n", qcci_qmi_vs_nv_init()); return 0; }
             env["LD_LIBRARY_PATH"] = str(work)
             env.pop("LD_PRELOAD", None)
             env.pop("CITYMAN_TEST_DTB_IDX", None)
+            env.pop("CITYMAN_TEST_HARDWARE", None)
+            if hardware:
+                env["CITYMAN_TEST_HARDWARE"] = hardware[0]
             if preload:
                 env["LD_PRELOAD"] = str(shim)
             if index is not None:
@@ -86,7 +95,7 @@ int main(void) { printf("result=%d\n", qcci_qmi_vs_nv_init()); return 0; }
             assert f"result={expected}\n" in output, (label, output)
             assert ("vendor-called" in output) == (expected == 42), (label, output)
             print(f"PASS: {label}")
-        print("8 host checks passed; Android runtime/PIN timing not tested.")
+        print(f"{len(cases)} host checks passed; Android runtime/PIN timing not tested.")
 
 
 if __name__ == "__main__":

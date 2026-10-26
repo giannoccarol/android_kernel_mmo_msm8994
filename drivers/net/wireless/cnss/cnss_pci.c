@@ -289,19 +289,22 @@ static struct cnss_data {
 	int wlan_bootstrap_gpio[NUM_OF_BOOTSTRAP];
 	atomic_t auto_suspended;
 	bool monitor_wake_intr;
+	bool no_modem_coex;
 } *penv;
 
 static int cnss_wlan_modem_coex_state(void)
 {
 	/*
-	 * Cityman's stock MPSS rejects the Android WLAN WCI-2 protocol and
-	 * asserts in coex_qmb.c when both radios are active. Explicitly tell
-	 * WLAN firmware to keep that coexistence interface off. Merely
-	 * suppressing modem notifications did not prevent the assertion.
-	 * The actual modem power state and SSR tracking remain unchanged.
+	 * Some modems (Lumia 950 XL's stock MPSS) reject the WLAN WCI-2
+	 * coexistence protocol and assert in coex_qmb.c when both radios are
+	 * active. With qcom,wlan-no-modem-coex the WLAN firmware is always told
+	 * the modem is off, which keeps that interface off; merely suppressing
+	 * the notifications did not prevent the assertion. LTE/WLAN coexistence
+	 * is lost, so 2.4 GHz throughput may drop while LTE is active. The real
+	 * modem power state and SSR tracking are unchanged.
 	 */
-	if (of_machine_is_compatible("mmo,cityman")) {
-		pr_info("Cityman: keeping WLAN modem coexistence interface off\n");
+	if (penv->no_modem_coex) {
+		pr_info_once("cnss: keeping WLAN modem coexistence interface off\n");
 		return 0;
 	}
 	return penv->modem_current_status;
@@ -2553,6 +2556,9 @@ static int cnss_probe(struct platform_device *pdev)
 	penv->notify_modem_status =
 		of_property_read_bool(dev->of_node,
 				      "qcom,notify-modem-status");
+	penv->no_modem_coex =
+		of_property_read_bool(dev->of_node,
+				      "qcom,wlan-no-modem-coex");
 
 	if (penv->notify_modem_status) {
 		ret = of_property_read_string_index(dev->of_node, "esoc-names",
