@@ -4,8 +4,9 @@
   `lineage-20-cityman-camera`, created from `lineage-20-cityman` and populated
   with selected camera changes. Do not merge the Android 11 experiment stack
   wholesale. The old `lineage-18.1-cityman-camera` is preserved separately.
-  Read `tools/cityman-camera/README.md` for source provenance and the missing
-  SMIA++ userspace module before attempting a phone test.
+  Read `tools/cityman-camera/README.md` and the device source sensor's `ABI.md`
+  for provenance, interoperability results and hardware limits before a phone
+  test. The new module is experimental and is not installed by default.
 
 - Work on `lineage-18.1-cityman-next`. The owner requested one branch on
   2026-10-25, superseding the earlier separate RIL branch convention. Keep changes

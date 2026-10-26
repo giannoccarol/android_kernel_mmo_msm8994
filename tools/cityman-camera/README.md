@@ -59,6 +59,12 @@ were needed relative to the Android 13 device baseline.
 
 ## SMIA++ integration boundary
 
+Update 2026-10-26: on the owner's request, a new equivalent source plugin has
+been implemented in the device camera branch's `camera-sensors/imx230`.
+The Android-built shared object passed ARM32 tests against the actual pinned
+angler consumer. The original hraj source remains missing, but no longer blocks
+an independent experimental implementation. See that directory's `ABI.md`.
+
 `inspect-smia-reference.py` reads the pinned public reference without executing
 its scripts or touching a phone. Fetch the reference if it is not already in
 the Git object database:
@@ -74,11 +80,12 @@ length 2550, VT pixel clock 460.8 MHz, nominal 29.99766 fps. The public arrays
 include zero sentinels; these are not writes to the read-only module-ID register.
 Matching metadata in the sensor library is required before enabling any program.
 
-This is **not an implemented SMIA++ driver or a working sensor module**. The
-published `smia65pp.c` references `senslib/sensor_lib_imx230.c`, but its matching
-userspace file/SDK is absent from the inspected public repositories. A kernel
-sensor wrapper cannot replace that missing module. Front Ducati is explicitly
-disabled in the reference too.
+The reference inspection tool does not implement a driver. The new device
+plugin uses the generic sensor driver instead of importing the full SMIA++
+kernel wrapper: the original angler consumer accepts long pointer-based
+register records, as verified with its actual conversion function. Its public
+12-entry inline exposure record is a different interface and is not a limit
+on these init/mode tables. Front Ducati remains disabled.
 
 The next implementation must define sensor metadata, mode/CSI selection,
 exposure/gain and power/configure/start/stop together. Keep sensor state per
@@ -90,6 +97,29 @@ The first hardware acceptance is an actual frame returned through the HAL;
 camera enumeration, SOF metadata and CSI packet counts alone are insufficient.
 Preview/open/close, JPEG, full resolution, 3A, AF/OIS/flash and front capture
 then need their own measured results.
+
+## Source module build and integration (2026-10-26)
+
+The camera branches include the owner's latest main Android 13 commits:
+kernel through `85514ba37fc`, device through `fb0314c`, vendor at `017bf72`.
+The kernel merge `dbef37116b8` compiled successfully; its private output is
+`android-cityman/kernel-camera-a13-20261026/source-sensor-base`, image SHA-256
+`7ffa4d330e39624897bbadbfbd1b67c16fa8a7691b3c1695c7123d7b69a625de`.
+
+The Android source-module build used device `4b6259b`, kernel `dbef37116b8`,
+vendor `8e70346`. The IMX230 library SHA-256 is
+`849a6f2365f3b6fad30859c771694bb9ddab93fa8a4f76b31730eba9c40a14bd`.
+The actual shared object passed the original angler capability/format and
+I2C/power/CSI translation functions under QEMU, with an official IMX377 control
+and a rejected zero-mode negative control. Separate tests cover new exposure
+callbacks, frame bounds, group hold and output buffer guards.
+
+No confidential SDK header or modified input sensor binary is used to build
+the library. Untested extension records are disabled. Product installation is
+gated by `CITYMAN_CAMERA_SMIA_EXPERIMENTAL=true`. Address 0x20 programming,
+shared LVS1 ownership, streaming and image delivery remain hardware questions;
+the current angler chromatix seed and optical metadata are provisional.
+The owner is handling audio/network/reboot work, so no phone was modified here.
 
 ## Source search (2026-10-26)
 
