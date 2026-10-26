@@ -25,6 +25,26 @@ outside the camera driver, relevant camera headers and board description are
 limited to these tools and documentation. Audio, modem and Android 13 backports
 remain on the Android 13 baseline.
 
+## Matching the next 24 MHz sensor profile
+
+The Android 13 device camera branch now supplies an opt-in `nubia24` profile
+alongside the default `smia9`. It keeps the angler plugin ABI and generates
+private reference register programs from a hash-pinned local input. MCLK,
+EXTCLK, PLL programs, geometry/clock metadata and CSID LUT change together;
+the kernel's ordinary power path accepts the requested 24 MHz without adding
+the old global MCLK override or any old userspace/kernel ABI shim.
+
+The first successful sensor probe caches the power sequence. A live plugin
+replacement after the baseline's 9.6 MHz probe does not establish a 24 MHz
+test: boot with the intended plugin present before the first probe. The device
+document `camera-sensors/imx230/NUBIA24.md` records build commands, included
+framework patch, private input, read-only capture tool and rollback.
+
+The owner integrated the source module into Android 13 and reached enumeration
+and CSI packets, but the current baseline has header ECC errors and no delivered
+preview. The new profile remains untested on the phone. VFE0 versus VFE1 is a
+separate comparison variable; no VFE route or ISP register override is forced.
+
 ## Build result
 
 The kernel at `d62fca264ee0ea3b4acd54caa93316cc27886f55` compiled successfully
