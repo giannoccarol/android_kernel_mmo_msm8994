@@ -442,8 +442,9 @@ static long audio_cal_shared_ioctl(struct file *file, unsigned int cmd,
 		sizeof(struct audio_cal_type_basic)) ||
 		(data->hdr.cal_type_size >
 		get_user_cal_type_size(data->hdr.cal_type))) {
-		pr_err("%s: cal type size %d is Invalid! Max is %zd!\n",
-			__func__, data->hdr.cal_type_size,
+		pr_err("%s: cal type %d: size %d is Invalid! Max is %zd!\n",
+			__func__, data->hdr.cal_type,
+			data->hdr.cal_type_size,
 			get_user_cal_type_size(data->hdr.cal_type));
 		ret = -EINVAL;
 		goto done;
