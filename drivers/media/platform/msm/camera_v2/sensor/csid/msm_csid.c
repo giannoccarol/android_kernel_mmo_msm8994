@@ -153,6 +153,14 @@ static int msm_csid_config(struct csid_device *csid_dev,
 		return -EINVAL;
 	}
 
+	if (csid_dev->lane_assign_override &&
+	    csid_params->lane_assign != csid_dev->lane_assign_override) {
+		pr_info("%s: lane_assign 0x%x replaced by board value 0x%x\n",
+			__func__, csid_params->lane_assign,
+			csid_dev->lane_assign_override);
+		csid_params->lane_assign = csid_dev->lane_assign_override;
+	}
+
 	/* cityman bring-up: the CSI setup comes from the userspace sensor library */
 	pr_info("%s: lane_cnt %d lane_assign 0x%x phy_sel %d csi_clk %u num_cid %d\n",
 		__func__, csid_params->lane_cnt, csid_params->lane_assign,
@@ -915,6 +923,20 @@ static int csid_probe(struct platform_device *pdev)
 			goto csid_no_resource;
 		}
 		CDBG("%s device id %d\n", __func__, pdev->id);
+
+		/*
+		 * Optional board lane order. The sensor library sets the
+		 * lane assignment of the module it was written for; a board
+		 * that routes the data lanes differently overrides it here.
+		 */
+		if (of_property_read_u32((&pdev->dev)->of_node,
+			"qcom,csi-lane-assign",
+			&new_csid_dev->lane_assign_override))
+			new_csid_dev->lane_assign_override = 0;
+		else
+			pr_info("%s: csid %d lane assign override 0x%x\n",
+				__func__, pdev->id,
+				new_csid_dev->lane_assign_override);
 
 		rc = of_property_read_u32((&pdev->dev)->of_node,
 			"qcom,csi-vdd-voltage", &csi_vdd_voltage);

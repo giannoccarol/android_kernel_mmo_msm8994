@@ -89,6 +89,8 @@ struct csid_device {
 	struct clk *csid_clk[CSID_NUM_CLK_MAX];
 	uint32_t csid_clk_index;
 	uint32_t csid_max_clk;
+	/* board CSI lane order (qcom,csi-lane-assign), 0 = use the library's */
+	uint32_t lane_assign_override;
 };
 
 #define VIDIOC_MSM_CSID_RELEASE \

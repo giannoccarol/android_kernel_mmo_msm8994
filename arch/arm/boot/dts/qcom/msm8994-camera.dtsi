@@ -93,7 +93,7 @@
 		qcom,clock-rates = <0 0 240000000 0 200000000 0 0>;
 	};
 
-	qcom,csid@fda08000  {
+	csid0: qcom,csid@fda08000  {
 		cell-index = <0>;
 		compatible = "qcom,csid-v3.1", "qcom,csid";
 		reg = <0xfda08000 0x400>;

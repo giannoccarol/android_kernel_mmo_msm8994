@@ -167,3 +167,14 @@
 		clock-names = "cam_src_clk", "cam_clk";
 	};
 };
+
+/*
+ * The rear module's data lanes DL0..DL3 reach CSI0 lanes 2/1/3/0
+ * (lane assignment 0x0423), not the 0x4320 order of reference IMX230
+ * libraries; with 0x4320 the CSID only sees ECC errors and no frame
+ * reaches the VFE. Measured on the Lumia 950 rear module (same module
+ * header 0xEACA) by archienz/android_device_msft_talkman.
+ */
+&csid0 {
+	qcom,csi-lane-assign = <0x0423>;
+};
