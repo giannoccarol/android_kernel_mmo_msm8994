@@ -13,7 +13,7 @@
  *           CCI master 1, slave 0x20, CSIPHY0/CSID0, MCLK0
  *           reset GPIO 92, standby GPIO 91
  *           VAF L23 2.85 V, VANA L29 2.85 V, VDIG L25 1.15 V, VIO LVS1
- *   front - Ducati module, ST VS6955 die (0x0016 = 0x03bb)
+ *   front - Ducati module, die ID 0x03bb at 0x0016 (part number unconfirmed)
  *           CCI master 0, slave 0x20, CSIPHY2/CSID2, MCLK2
  *           reset GPIO 104, standby GPIO 105
  *           VANA L17 2.8 V, VIO LVS1
@@ -47,6 +47,7 @@
 	 */
 	actuator0: qcom,actuator@0 {
 		cell-index = <0>;
+		status = "disabled";
 		reg = <0x0>;
 		compatible = "qcom,actuator";
 		qcom,cci-master = <1>;
@@ -59,6 +60,7 @@
 
 	ois0: qcom,ois@0 {
 		cell-index = <0>;
+		status = "disabled";
 		reg = <0x0>;
 		compatible = "qcom,ois";
 		qcom,cci-master = <1>;
@@ -77,9 +79,7 @@
 		qcom,csiphy-sd-index = <0>;
 		qcom,csid-sd-index = <0>;
 		qcom,mount-angle = <270>;
-		qcom,actuator-src = <&actuator0>;
-		qcom,ois-src = <&ois0>;
-		qcom,led-flash-src = <&led_flash0>;
+		/* Attach companion devices only after their drivers are verified. */
 		cam_vaf-supply = <&pm8994_l23>;
 		cam_vana-supply = <&pm8994_l29>;
 		cam_vdig-supply = <&pm8994_l25>;
@@ -121,7 +121,7 @@
 		clock-names = "cam_src_clk", "cam_clk";
 	};
 
-	/* Front: Ducati / VS6955, wired to CSI2 */
+	/* Front: Ducati, wired to CSI2; no validated sensor library yet. */
 	qcom,camera@1 {
 		cell-index = <1>;
 		compatible = "qcom,camera";
@@ -161,7 +161,7 @@
 		qcom,sensor-position = <1>;
 		qcom,sensor-mode = <0>;
 		qcom,cci-master = <0>;
-		status = "ok";
+		status = "disabled";
 		clocks = <&clock_mmss clk_mclk2_clk_src>,
 			 <&clock_mmss clk_camss_mclk2_clk>;
 		clock-names = "cam_src_clk", "cam_clk";
