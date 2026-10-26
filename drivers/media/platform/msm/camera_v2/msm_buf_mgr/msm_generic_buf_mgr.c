@@ -442,7 +442,13 @@ static long msm_bmgr_subdev_fops_compat_ioctl(struct file *file,
 	struct v4l2_subdev *sd = vdev_to_v4l2_subdev(vdev);
 	int32_t rc = 0;
 
-	void __user *up = (void __user *)arg;
+	void __user *up = compat_ptr(arg);
+
+	/* Pin the 32-bit angler ABI; do not accept unrelated legacy layouts. */
+	BUILD_BUG_ON(sizeof(struct msm_buf_mngr_info32_t) != 104);
+	BUILD_BUG_ON(offsetof(struct msm_buf_mngr_info32_t, timestamp) != 0x10);
+	BUILD_BUG_ON(offsetof(struct msm_buf_mngr_info32_t, index) != 0x18);
+	BUILD_BUG_ON(offsetof(struct msm_buf_mngr_info32_t, type) != 0x20);
 
 	/* Convert 32 bit IOCTL ID's to 64 bit IOCTL ID's
 	 * except VIDIOC_MSM_CPP_CFG32, which needs special
@@ -471,7 +477,7 @@ static long msm_bmgr_subdev_fops_compat_ioctl(struct file *file,
 	case VIDIOC_MSM_BUF_MNGR_BUF_DONE:
 	case VIDIOC_MSM_BUF_MNGR_PUT_BUF: {
 		struct msm_buf_mngr_info32_t buf_info32;
-		struct msm_buf_mngr_info buf_info;
+		struct msm_buf_mngr_info buf_info = { 0 };
 
 		if (copy_from_user(&buf_info32, (void __user *)up,
 					sizeof(struct msm_buf_mngr_info32_t)))
@@ -480,6 +486,7 @@ static long msm_bmgr_subdev_fops_compat_ioctl(struct file *file,
 		buf_info.session_id = buf_info32.session_id;
 		buf_info.stream_id = buf_info32.stream_id;
 		buf_info.frame_id = buf_info32.frame_id;
+		buf_info.flags = buf_info32.flags;
 		buf_info.index = buf_info32.index;
 		buf_info.timestamp.tv_sec = (long) buf_info32.timestamp.tv_sec;
 		buf_info.timestamp.tv_usec = (long) buf_info32.
@@ -496,6 +503,7 @@ static long msm_bmgr_subdev_fops_compat_ioctl(struct file *file,
 		buf_info32.session_id = buf_info.session_id;
 		buf_info32.stream_id = buf_info.stream_id;
 		buf_info32.index = buf_info.index;
+		buf_info32.flags = buf_info.flags;
 		buf_info32.timestamp.tv_sec = (int32_t) buf_info.
 							timestamp.tv_sec;
 		buf_info32.timestamp.tv_usec = (int32_t) buf_info.timestamp.
