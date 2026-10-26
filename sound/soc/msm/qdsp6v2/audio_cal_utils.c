@@ -60,6 +60,7 @@ size_t get_cal_info_size(int32_t cal_type)
 	case ADM_AUDPROC_CAL_TYPE:
 		size = sizeof(struct audio_cal_info_audproc);
 		break;
+	case ADM_RTAC_AUDVOL_CAL_TYPE:
 	case ADM_AUDVOL_CAL_TYPE:
 		size = sizeof(struct audio_cal_info_audvol);
 		break;
@@ -81,6 +82,12 @@ size_t get_cal_info_size(int32_t cal_type)
 	case AFE_FB_SPKR_PROT_CAL_TYPE:
 		size = sizeof(struct audio_cal_info_spk_prot_cfg);
 		break;
+	case AFE_TOPOLOGY_CAL_TYPE:
+		size = sizeof(struct audio_cal_info_afe_top);
+		break;
+	case AFE_CUST_TOPOLOGY_CAL_TYPE:
+		size = 0;
+		break;
 	case AFE_ANC_CAL_TYPE:
 		size = 0;
 		break;
@@ -92,6 +99,12 @@ size_t get_cal_info_size(int32_t cal_type)
 		break;
 	case AFE_SIDETONE_CAL_TYPE:
 		size = sizeof(struct audio_cal_info_sidetone);
+		break;
+	case LSM_CUST_TOPOLOGY_CAL_TYPE:
+		size = 0;
+		break;
+	case LSM_TOPOLOGY_CAL_TYPE:
+		size = sizeof(struct audio_cal_info_lsm_top);
 		break;
 	case LSM_CAL_TYPE:
 		size = sizeof(struct audio_cal_info_lsm);
@@ -170,6 +183,7 @@ size_t get_user_cal_type_size(int32_t cal_type)
 	case ADM_AUDPROC_CAL_TYPE:
 		size = sizeof(struct audio_cal_type_audproc);
 		break;
+	case ADM_RTAC_AUDVOL_CAL_TYPE:
 	case ADM_AUDVOL_CAL_TYPE:
 		size = sizeof(struct audio_cal_type_audvol);
 		break;
@@ -191,6 +205,12 @@ size_t get_user_cal_type_size(int32_t cal_type)
 	case AFE_FB_SPKR_PROT_CAL_TYPE:
 		size = sizeof(struct audio_cal_type_fb_spk_prot_cfg);
 		break;
+	case AFE_TOPOLOGY_CAL_TYPE:
+		size = sizeof(struct audio_cal_type_afe_top);
+		break;
+	case AFE_CUST_TOPOLOGY_CAL_TYPE:
+		size = sizeof(struct audio_cal_type_basic);
+		break;
 	case AFE_ANC_CAL_TYPE:
 		size = 0;
 		break;
@@ -202,6 +222,12 @@ size_t get_user_cal_type_size(int32_t cal_type)
 		break;
 	case AFE_SIDETONE_CAL_TYPE:
 		size = sizeof(struct audio_cal_type_sidetone);
+		break;
+	case LSM_CUST_TOPOLOGY_CAL_TYPE:
+		size = sizeof(struct audio_cal_type_basic);
+		break;
+	case LSM_TOPOLOGY_CAL_TYPE:
+		size = sizeof(struct audio_cal_type_lsm_top);
 		break;
 	case LSM_CAL_TYPE:
 		size = sizeof(struct audio_cal_type_lsm);
