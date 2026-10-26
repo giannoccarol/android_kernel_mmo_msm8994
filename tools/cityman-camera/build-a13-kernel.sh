@@ -6,6 +6,9 @@ output=$(realpath -m "${1:?usage: build-a13-kernel.sh NEW_OUTPUT CROSS_COMPILE_P
 compiler=${2:?supply the Android GCC 4.9 prefix}
 jobs=${3:-8}
 [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid job count' >&2; exit 1; }
+[[ "$output" != *[[:space:]]* && "$compiler" != *[[:space:]]* ]] || {
+    echo 'Kernel 3.10 needs output and toolchain paths without spaces' >&2; exit 1;
+}
 [[ $(git -C "$repo" branch --show-current) == lineage-20-cityman-camera ]] || {
     echo 'Select lineage-20-cityman-camera first' >&2; exit 1;
 }
