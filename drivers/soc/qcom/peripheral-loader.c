@@ -11,6 +11,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/delay.h>
 #include <linux/string.h>
 #include <linux/firmware.h>
 #include <linux/io.h>
@@ -41,6 +42,8 @@
 #include <asm-generic/io-64-nonatomic-lo-hi.h>
 
 #include "peripheral-loader.h"
+
+#define PIL_SEG_LOAD_ATTEMPTS 3
 
 #define pil_err(desc, fmt, ...)						\
 	dev_err(desc->dev, "%s: " fmt, desc->name, ##__VA_ARGS__)
@@ -580,11 +583,27 @@ static int pil_load_seg(struct pil_desc *desc, struct pil_seg *seg)
 	void *map_data = desc->map_data ? desc->map_data : &map_fw_info;
 
 	if (seg->filesz) {
+		int attempt;
+
 		snprintf(fw_name, ARRAY_SIZE(fw_name), "%s.b%02d",
 				desc->fw_name, num);
-		ret = request_firmware_direct(fw_name, desc->dev, seg->paddr,
-					      seg->filesz, desc->map_fw_mem,
-					      desc->unmap_fw_mem, map_data);
+		/*
+		 * The segments are requested back to back through the user
+		 * helper; at boot a request can be dropped before ueventd
+		 * serves it. Retry a few times before giving up the boot.
+		 */
+		for (attempt = 1; attempt <= PIL_SEG_LOAD_ATTEMPTS; attempt++) {
+			ret = request_firmware_direct(fw_name, desc->dev,
+					seg->paddr, seg->filesz,
+					desc->map_fw_mem, desc->unmap_fw_mem,
+					map_data);
+			if (ret >= 0)
+				break;
+			pil_err(desc, "Failed to load blob %s (attempt %d): %d\n",
+				fw_name, attempt, ret);
+			if (attempt < PIL_SEG_LOAD_ATTEMPTS)
+				msleep(100);
+		}
 		if (ret < 0) {
 			pil_err(desc, "Failed to locate blob %s or blob is too big.\n",
 				fw_name);

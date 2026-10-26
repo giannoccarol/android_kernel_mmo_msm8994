@@ -659,7 +659,14 @@ static int pil_msa_mba_auth(struct pil_desc *pil)
 
 	if (ret)
 		modem_log_rmb_regs(drv->rmb_base);
-	if (q6_drv->ahb_clk_vote)
+	/*
+	 * On failure pil_boot() calls deinit_image(), which still talks to
+	 * the MBA through the RMB registers and drops this vote itself.
+	 * Dropping it here too left the registers unclocked (synchronous
+	 * external abort in __pil_mss_deinit_image) and the clock released
+	 * twice.
+	 */
+	if (q6_drv->ahb_clk_vote && (!ret || !pil->ops->deinit_image))
 		clk_disable_unprepare(q6_drv->ahb_clk);
 
 	return ret;
