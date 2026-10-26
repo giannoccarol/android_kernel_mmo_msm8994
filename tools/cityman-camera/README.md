@@ -49,6 +49,14 @@ worktree's generated objects. It creates no boot image and never accesses the
 phone. No phone modifications or flash were performed during this preparation;
 the owner is working on reboot issues separately.
 
+The Android 13 HAL/module build also passed using isolated source archives:
+device `261de03`, kernel `d62fca264ee`, vendor `8e70346`. The vendor's 131 camera
+file hashes all match its manifest after removal of the old probe module.
+Full inputs/logs/output hashes are private under
+`android-cityman/camera-a13-hal-20261026`. The device branch documents its build
+wrapper's compiler-cache and output-hash-path repairs. No source HAL changes
+were needed relative to the Android 13 device baseline.
+
 ## SMIA++ integration boundary
 
 `inspect-smia-reference.py` reads the pinned public reference without executing
