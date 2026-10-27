@@ -41,13 +41,17 @@
 
 &cci {
 	/*
-	 * AF and OIS drivers live inside the rear module, so they share the
-	 * rear sensor's CCI master. Their slave addresses come from the
-	 * userspace libraries.
+	 * AF and OIS live in one controller inside the rear Carrera module,
+	 * on the rear sensor's CCI master. The Windows SMIA++ driver talks to
+	 * it at 8-bit address 0x7c with 16-bit register addresses (lens
+	 * position 0x05f0, OIS control 0x0520). msm_actuator takes the slave
+	 * address from the userspace actuator library, not from this node.
+	 *
+	 * OIS stays disabled: its mode sequences are known but the
+	 * calibration upload from the module NVM is not implemented.
 	 */
 	actuator0: qcom,actuator@0 {
 		cell-index = <0>;
-		status = "disabled";
 		reg = <0x0>;
 		compatible = "qcom,actuator";
 		qcom,cci-master = <1>;
@@ -79,7 +83,7 @@
 		qcom,csiphy-sd-index = <0>;
 		qcom,csid-sd-index = <0>;
 		qcom,mount-angle = <270>;
-		/* Attach companion devices only after their drivers are verified. */
+		qcom,actuator-src = <&actuator0>;
 		cam_vaf-supply = <&pm8994_l23>;
 		cam_vana-supply = <&pm8994_l29>;
 		cam_vdig-supply = <&pm8994_l25>;
