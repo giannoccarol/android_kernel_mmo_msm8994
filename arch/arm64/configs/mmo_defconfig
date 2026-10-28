@@ -862,7 +862,6 @@ CONFIG_NET_SCH_PRIO=y
 # CONFIG_NET_SCH_CODEL is not set
 # CONFIG_NET_SCH_FQ_CODEL is not set
 # CONFIG_NET_SCH_FQ is not set
-# CONFIG_NET_SCH_INGRESS is not set
 # CONFIG_NET_SCH_PLUG is not set
 
 #
@@ -890,7 +889,6 @@ CONFIG_NET_EMATCH_U32=y
 # CONFIG_NET_EMATCH_TEXT is not set
 CONFIG_NET_CLS_ACT=y
 # CONFIG_NET_ACT_POLICE is not set
-# CONFIG_NET_ACT_GACT is not set
 # CONFIG_NET_ACT_MIRRED is not set
 # CONFIG_NET_ACT_IPT is not set
 # CONFIG_NET_ACT_NAT is not set
@@ -4258,3 +4256,11 @@ CONFIG_LIBFDT=y
 CONFIG_QMI_ENCDEC=y
 # CONFIG_QMI_ENCDEC_DEBUG is not set
 # CONFIG_STRICT_MEMORY_RWX is not set
+# Android 16/17 networking BPF: JIT always on, clsact/matchall for tc programs,
+# tracepoint programs (gpu_mem, time_in_state).
+CONFIG_BPF_JIT=y
+CONFIG_BPF_JIT_ALWAYS_ON=y
+CONFIG_BPF_EVENTS=y
+CONFIG_NET_SCH_INGRESS=y
+CONFIG_NET_CLS_MATCHALL=y
+CONFIG_NET_ACT_GACT=y
