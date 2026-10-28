@@ -712,9 +712,11 @@ __SYSCALL(__NR_bpf, sys_bpf)
 __SYSCALL(__NR_pidfd_send_signal, sys_pidfd_send_signal)
 #define __NR_pidfd_open 434
 __SYSCALL(__NR_pidfd_open, sys_pidfd_open)
+#define __NR_process_mrelease 448
+__SYSCALL(__NR_process_mrelease, sys_process_mrelease)
 
 #undef __NR_syscalls
-#define __NR_syscalls 435
+#define __NR_syscalls 449
 
 /*
  * All syscalls below here should go away really,
