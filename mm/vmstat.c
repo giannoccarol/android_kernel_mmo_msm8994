@@ -833,6 +833,13 @@ const char * const vmstat_text[] = {
 	"thp_zero_page_alloc_failed",
 #endif
 
+	/* enum vm_event_total_item: sums of the per-zone counters above */
+	"pgrefill",
+	"pgsteal_kswapd",
+	"pgsteal_direct",
+	"pgscan_kswapd",
+	"pgscan_direct",
+
 #endif /* CONFIG_VM_EVENTS_COUNTERS */
 };
 #endif /* CONFIG_PROC_FS || CONFIG_SYSFS || CONFIG_NUMA */
@@ -1217,6 +1224,48 @@ enum writeback_stat_item {
 	NR_VM_WRITEBACK_STAT_ITEMS,
 };
 
+#ifdef CONFIG_VM_EVENT_COUNTERS
+/*
+ * Newer userspace (e.g. lmkd) only parses the node-wide reclaim counters
+ * introduced with node-based LRUs. Export their sums after the per-zone
+ * events so the existing lines stay where they are.
+ */
+enum vm_event_total_item {
+	VM_EVENT_TOTAL_PGREFILL,
+	VM_EVENT_TOTAL_PGSTEAL_KSWAPD,
+	VM_EVENT_TOTAL_PGSTEAL_DIRECT,
+	VM_EVENT_TOTAL_PGSCAN_KSWAPD,
+	VM_EVENT_TOTAL_PGSCAN_DIRECT,
+	NR_VM_EVENT_TOTAL_ITEMS,
+};
+
+static unsigned long sum_zone_vm_events(unsigned long *events, int first)
+{
+	unsigned long sum = 0;
+	int i;
+
+	for (i = 0; i < MAX_NR_ZONES; i++)
+		sum += events[first + i];
+	return sum;
+}
+
+#define ZONE_EVENT_FIRST(item)	(item##_NORMAL - ZONE_NORMAL)
+
+static void sum_vm_event_totals(unsigned long *events, unsigned long *totals)
+{
+	totals[VM_EVENT_TOTAL_PGREFILL] =
+		sum_zone_vm_events(events, ZONE_EVENT_FIRST(PGREFILL));
+	totals[VM_EVENT_TOTAL_PGSTEAL_KSWAPD] =
+		sum_zone_vm_events(events, ZONE_EVENT_FIRST(PGSTEAL_KSWAPD));
+	totals[VM_EVENT_TOTAL_PGSTEAL_DIRECT] =
+		sum_zone_vm_events(events, ZONE_EVENT_FIRST(PGSTEAL_DIRECT));
+	totals[VM_EVENT_TOTAL_PGSCAN_KSWAPD] =
+		sum_zone_vm_events(events, ZONE_EVENT_FIRST(PGSCAN_KSWAPD));
+	totals[VM_EVENT_TOTAL_PGSCAN_DIRECT] =
+		sum_zone_vm_events(events, ZONE_EVENT_FIRST(PGSCAN_DIRECT));
+}
+#endif
+
 static void *vmstat_start(struct seq_file *m, loff_t *pos)
 {
 	unsigned long *v;
@@ -1229,6 +1278,10 @@ static void *vmstat_start(struct seq_file *m, loff_t *pos)
 
 #ifdef CONFIG_VM_EVENT_COUNTERS
 	stat_items_size += sizeof(struct vm_event_state);
+	stat_items_size += NR_VM_EVENT_TOTAL_ITEMS * sizeof(unsigned long);
+	BUILD_BUG_ON(ARRAY_SIZE(vmstat_text) != NR_VM_ZONE_STAT_ITEMS +
+		     NR_VM_WRITEBACK_STAT_ITEMS + NR_VM_EVENT_ITEMS +
+		     NR_VM_EVENT_TOTAL_ITEMS);
 #endif
 
 	v = kmalloc(stat_items_size, GFP_KERNEL);
@@ -1247,6 +1300,7 @@ static void *vmstat_start(struct seq_file *m, loff_t *pos)
 	all_vm_events(v);
 	v[PGPGIN] /= 2;		/* sectors -> kbytes */
 	v[PGPGOUT] /= 2;
+	sum_vm_event_totals(v, v + NR_VM_EVENT_ITEMS);
 #endif
 	return (unsigned long *)m->private + *pos;
 }
