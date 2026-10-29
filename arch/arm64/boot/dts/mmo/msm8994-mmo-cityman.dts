@@ -64,3 +64,21 @@
 &cnss {
 	qcom,wlan-no-modem-coex;
 };
+
+/* DDR floor follows the CPU frequency, so input boosts and launch locks
+ * also raise the memory bus (the msm8994 default keeps 200 MHz up to
+ * 1.824 GHz). Values are entries of the cpubw bandwidth table. */
+&devfreq_cpufreq {
+	mincpubw-cpufreq {
+		cpu-to-dev-map-0 =
+			<  960000  1525 >,
+			< 1248000  3509 >,
+			< 1344000  4066 >,
+			< 1555200  5928 >;
+		cpu-to-dev-map-4 =
+			<  960000  2288 >,
+			< 1248000  4066 >,
+			< 1632000  5928 >,
+			< 1958400  7904 >;
+	};
+};
