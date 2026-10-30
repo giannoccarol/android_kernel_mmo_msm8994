@@ -712,6 +712,8 @@ __SYSCALL(__NR_bpf, sys_bpf)
 __SYSCALL(__NR_pidfd_send_signal, sys_pidfd_send_signal)
 #define __NR_pidfd_open 434
 __SYSCALL(__NR_pidfd_open, sys_pidfd_open)
+#define __NR_epoll_pwait2 441
+__SYSCALL(__NR_epoll_pwait2, sys_epoll_pwait2)
 #define __NR_process_mrelease 448
 __SYSCALL(__NR_process_mrelease, sys_process_mrelease)
 

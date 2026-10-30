@@ -2067,6 +2067,46 @@ SYSCALL_DEFINE6(epoll_pwait, int, epfd, struct epoll_event __user *, events,
 	return error;
 }
 
+/*
+ * epoll_pwait2() (Linux 5.11) takes the timeout as a struct __kernel_timespec
+ * (two 64-bit fields, on 32-bit userspace too). Android 16 libgui waits for
+ * buffer releases with it and logged ENOSYS on every frame. Wait in
+ * milliseconds like epoll_pwait(), rounding the timeout up; NULL waits
+ * forever.
+ */
+static int ep_timeout_ms(const s64 __user *timeout, int *ms)
+{
+	s64 ts[2];
+
+	if (!timeout) {
+		*ms = -1;
+		return 0;
+	}
+	if (copy_from_user(ts, timeout, sizeof(ts)))
+		return -EFAULT;
+	if (ts[0] < 0 || ts[1] < 0 || ts[1] >= NSEC_PER_SEC)
+		return -EINVAL;
+	if (ts[0] >= INT_MAX / MSEC_PER_SEC)
+		*ms = INT_MAX;
+	else
+		*ms = (int)(ts[0] * MSEC_PER_SEC +
+			    DIV_ROUND_UP((u64)ts[1], NSEC_PER_MSEC));
+	return 0;
+}
+
+SYSCALL_DEFINE6(epoll_pwait2, int, epfd, struct epoll_event __user *, events,
+		int, maxevents, const s64 __user *, timeout,
+		const sigset_t __user *, sigmask, size_t, sigsetsize)
+{
+	int ms, error;
+
+	error = ep_timeout_ms(timeout, &ms);
+	if (error)
+		return error;
+	return sys_epoll_pwait(epfd, events, maxevents, ms, sigmask,
+			       sigsetsize);
+}
+
 #ifdef CONFIG_COMPAT
 COMPAT_SYSCALL_DEFINE6(epoll_pwait, int, epfd,
 			struct epoll_event __user *, events,
@@ -2110,6 +2150,21 @@ COMPAT_SYSCALL_DEFINE6(epoll_pwait, int, epfd,
 	}
 
 	return err;
+}
+
+COMPAT_SYSCALL_DEFINE6(epoll_pwait2, int, epfd,
+			struct epoll_event __user *, events,
+			int, maxevents, const s64 __user *, timeout,
+			const compat_sigset_t __user *, sigmask,
+			compat_size_t, sigsetsize)
+{
+	int ms, error;
+
+	error = ep_timeout_ms(timeout, &ms);
+	if (error)
+		return error;
+	return compat_sys_epoll_pwait(epfd, events, maxevents, ms, sigmask,
+				      sigsetsize);
 }
 #endif
 
