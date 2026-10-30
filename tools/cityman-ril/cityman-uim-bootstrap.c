@@ -62,8 +62,14 @@
 
 #define MAX_AID_LEN		32
 #define MAX_RETRIES		3
-#define POLL_TRANSITION_S	2
-#define POLL_PIN_S		5
+/*
+ * While the user unlocks the card, poll fast: after a correct PIN the modem
+ * stays in the personalization check until Subscription OK is sent, and
+ * Android 16 keeps the card in PIN_REQUIRED meanwhile, so the PIN screen came
+ * back for a couple of seconds after it was entered.
+ */
+#define POLL_TRANSITION_MS	250
+#define POLL_PIN_MS		500
 #define POLL_RADIO_PENDING_S	5
 #define POLL_STABLE_S		30
 #define POLL_NO_USIM_S		10
@@ -308,7 +314,7 @@ int main(int argc, char **argv)
 	for (;;) {
 		const uint8_t *status;
 		struct usim usim;
-		unsigned int n, gw_index, poll;
+		unsigned int n, gw_index, poll, poll_ms = 0;
 		int signature;
 
 		if (request(uim, QMI_UIM_GET_CARD_STATUS, NULL, 0)) {
@@ -463,11 +469,15 @@ drop_radio_clients:
 			}
 		}
 		/* PIN- and PUK-required states are only observed; the user handles them. */
-		poll = (usim.state == APP_STATE_PIN_REQUIRED ||
-			usim.state == APP_STATE_PUK_REQUIRED) ?
-			POLL_PIN_S : POLL_TRANSITION_S;
+		poll = 0;
+		poll_ms = (usim.state == APP_STATE_PIN_REQUIRED ||
+			   usim.state == APP_STATE_PUK_REQUIRED) ?
+			  POLL_PIN_MS : POLL_TRANSITION_MS;
 next:
-		sleep(poll);
+		if (poll)
+			sleep(poll);
+		else
+			usleep(poll_ms * 1000);
 	}
 
 	if (nas)

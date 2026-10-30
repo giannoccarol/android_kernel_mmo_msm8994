@@ -173,7 +173,8 @@ as a transport or registration workaround.
   times (5/15/45 s backoff), then only observed until the USIM state changes.
   Re-sending 0x0038 in a loop resets the SMD channel and drops the SIM.
 - Once the radio subscription is handled and the state is stable, the helper
-  polls every 30 s instead of 5 s. A failing DMS/NAS request reopens those
+  polls every 30 s. While the card waits for the PIN/PUK it polls every
+  500 ms, and every 250 ms in the other transitional states. A failing DMS/NAS request reopens those
   clients instead of exiting.
 - The helper runs as `radio` instead of root. All helpers share
   `cityman-detect.h`: `ro.boot.hardware=cityman`, or soc_id 207 with
@@ -183,6 +184,11 @@ as a transport or registration workaround.
 - Host tests: `test-ril-init.py` (10 checks) and `test-uim-parse.py` (9 parser
   checks).
 
-Open: on boot the PIN prompt appears a second time after a correct PIN and
-then clears by itself. Check the radio log for the order of PIN verify,
-Subscription OK and the next card status before changing the sequence.
+PIN prompt shown twice (Android 16 log of 30/10/2026): after a correct PIN the
+modem moves the USIM to the personalization check (QMI app state 4, Android's
+`APPSTATE_SUBSCRIPTION_PERSO`) and waits for Subscription OK. Android 16 does
+not change the external card state for that app state, so the card stays
+`PIN_REQUIRED`; a rebroadcast of that state about 1.3 s after the PIN brought
+the PIN screen back until READY arrived. With the old 5 s PIN poll the helper
+sent Subscription OK about 2 s after the PIN. The fast poll above closes that
+window; still to be confirmed on the phone.
