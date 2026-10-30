@@ -13,6 +13,8 @@
 #define pr_fmt(fmt) "%s:%d " fmt, __func__, __LINE__
 
 #include <linux/module.h>
+#include <linux/compat.h>
+#include <linux/ratelimit.h>
 #include "msm_sd.h"
 #include "msm_actuator.h"
 #include "msm_cci.h"
@@ -32,9 +34,69 @@ static int32_t msm_actuator_power_up(struct msm_actuator_ctrl_t *a_ctrl);
 static int32_t msm_actuator_power_down(struct msm_actuator_ctrl_t *a_ctrl);
 
 static struct msm_actuator msm_vcm_actuator_table;
+static struct msm_actuator_ctrl_t *talkman_act_ctrl;
+
+/*
+ * What the actuator was actually programmed with.
+ *
+ * A step table that came out wrong is invisible from userspace: the daemon
+ * sees CFG_MOVE_FOCUS return -EINVAL, and the reason (every entry clamped to
+ * max_code_size, so no move ever produces a register write) is only in kernel
+ * memory.  Read it back instead of inferring it.
+ *
+ *   cat /sys/module/msm_actuator/parameters/step_table
+ */
+static int talkman_step_table_get(char *buf, const struct kernel_param *kp)
+{
+	struct msm_actuator_ctrl_t *a = talkman_act_ctrl;
+	int i, n = 0;
+
+	if (!a)
+		return scnprintf(buf, PAGE_SIZE, "no actuator\n");
+	n += scnprintf(buf + n, PAGE_SIZE - n,
+		       "act_type %d state %d data_size(max_code) %u total_steps %u region_size %u initial_code %d curr_step %u\n",
+		       a->actuator_state, a->i2c_data_type, a->max_code_size,
+		       a->total_steps, a->region_size, a->initial_code,
+		       a->curr_step_pos);
+	n += scnprintf(buf + n, PAGE_SIZE - n,
+		       "sizeof(region_params_t) = %u\n",
+		       (unsigned)sizeof(struct region_params_t));
+	for (i = 0; i < a->region_size && i < MAX_ACTUATOR_REGION; i++) {
+		const unsigned char *raw =
+			(const unsigned char *)&a->region_params[i];
+		int k;
+
+		n += scnprintf(buf + n, PAGE_SIZE - n,
+			       "region[%d] bound %u,%u code_per_step %u qvalue %u raw",
+			       i, a->region_params[i].step_bound[0],
+			       a->region_params[i].step_bound[1],
+			       a->region_params[i].code_per_step,
+			       a->region_params[i].qvalue);
+		for (k = 0; k < sizeof(struct region_params_t); k++)
+			n += scnprintf(buf + n, PAGE_SIZE - n, " %02x", raw[k]);
+		n += scnprintf(buf + n, PAGE_SIZE - n, "\n");
+	}
+	if (!a->step_position_table)
+		return n + scnprintf(buf + n, PAGE_SIZE - n,
+				     "step_position_table NULL\n");
+	for (i = 0; i <= a->total_steps && n < PAGE_SIZE - 32; i++) {
+		if (i % 16 == 0)
+			n += scnprintf(buf + n, PAGE_SIZE - n, "\n%4d:", i);
+		n += scnprintf(buf + n, PAGE_SIZE - n, " %5u",
+			       a->step_position_table[i]);
+	}
+	n += scnprintf(buf + n, PAGE_SIZE - n, "\n");
+	return n;
+}
+
+static const struct kernel_param_ops talkman_step_table_ops = {
+	.get = talkman_step_table_get,
+};
+module_param_cb(step_table, &talkman_step_table_ops, NULL, 0444);
 static struct msm_actuator msm_piezo_actuator_table;
 static struct msm_actuator msm_hvcm_actuator_table;
 static struct msm_actuator msm_bivcm_actuator_table;
+static struct msm_actuator msm_vcm_be_actuator_table;
 
 static struct i2c_driver msm_actuator_i2c_driver;
 static struct msm_actuator *actuators[] = {
@@ -42,6 +104,7 @@ static struct msm_actuator *actuators[] = {
 	&msm_piezo_actuator_table,
 	&msm_hvcm_actuator_table,
 	&msm_bivcm_actuator_table,
+	&msm_vcm_be_actuator_table,
 };
 
 static int32_t msm_actuator_piezo_set_default_focus(
@@ -81,8 +144,38 @@ static int32_t msm_actuator_piezo_set_default_focus(
 	return rc;
 }
 
+/*
+ * Split a two-register DAC value across a pair of reg_tbl rows.
+ *
+ * Upstream fixes the order: row i takes the low byte, row i+1 the high byte.
+ * That is wrong for a part that latches on the low-half write, because the
+ * high half then arrives after the latch and is dropped -- which is exactly
+ * what the talkman lens does (its 0x05F0 keeps its old value while 0x05F1
+ * tracks perfectly).  hi_first swaps the two, matching the order the Windows
+ * Phone driver uses on this module: 0x05F0 = pos >> 8, then 0x05F1 = pos.
+ */
+static void msm_actuator_parse_i2c_params_ex(struct msm_actuator_ctrl_t *a_ctrl,
+	int16_t next_lens_position, uint32_t hw_params, uint16_t delay,
+	int hi_first);
+
 static void msm_actuator_parse_i2c_params(struct msm_actuator_ctrl_t *a_ctrl,
 	int16_t next_lens_position, uint32_t hw_params, uint16_t delay)
+{
+	msm_actuator_parse_i2c_params_ex(a_ctrl, next_lens_position, hw_params,
+					 delay, 0);
+}
+
+static void msm_actuator_parse_i2c_params_be(
+	struct msm_actuator_ctrl_t *a_ctrl, int16_t next_lens_position,
+	uint32_t hw_params, uint16_t delay)
+{
+	msm_actuator_parse_i2c_params_ex(a_ctrl, next_lens_position, hw_params,
+					 delay, 1);
+}
+
+static void msm_actuator_parse_i2c_params_ex(struct msm_actuator_ctrl_t *a_ctrl,
+	int16_t next_lens_position, uint32_t hw_params, uint16_t delay,
+	int hi_first)
 {
 	struct msm_actuator_reg_params_t *write_arr = NULL;
 	uint32_t hw_dword = hw_params;
@@ -114,7 +207,9 @@ static void msm_actuator_parse_i2c_params(struct msm_actuator_ctrl_t *a_ctrl,
 				i2c_byte1 = write_arr[i].reg_addr;
 				i2c_byte2 = value;
 				if (size != (i+1)) {
-					i2c_byte2 = value & 0xFF;
+					i2c_byte2 = hi_first ?
+						((value & 0xFF00) >> 8) :
+						(value & 0xFF);
 					CDBG("byte1:0x%x, byte2:0x%x\n",
 						i2c_byte1, i2c_byte2);
 					if (a_ctrl->i2c_tbl_index >
@@ -131,7 +226,9 @@ static void msm_actuator_parse_i2c_params(struct msm_actuator_ctrl_t *a_ctrl,
 					a_ctrl->i2c_tbl_index++;
 					i++;
 					i2c_byte1 = write_arr[i].reg_addr;
-					i2c_byte2 = (value & 0xFF00) >> 8;
+					i2c_byte2 = hi_first ?
+						(value & 0xFF) :
+						((value & 0xFF00) >> 8);
 				}
 			} else {
 				i2c_byte1 = (value & 0xFF00) >> 8;
@@ -664,7 +761,17 @@ static int32_t msm_actuator_move_focus(
 	rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_write_table_w_microdelay(
 		&a_ctrl->i2c_client, &reg_setting);
 	if (rc < 0) {
-		pr_err("i2c write error:%d\n", rc);
+		/*
+		 * CCI rejects a zero-length burst with -EINVAL, which is what
+		 * a move that produced no register writes looks like from
+		 * here.  Print the inputs: the interesting case is a request
+		 * whose damping ramp emitted nothing at all.
+		 */
+		pr_err("i2c write error:%d size=%u dir=%d sign=%d dest=%d curr_step=%d curr_pos=%u region=%d\n",
+			rc, a_ctrl->i2c_tbl_index, dir, sign_dir, dest_step_pos,
+			a_ctrl->curr_step_pos, curr_lens_pos,
+			a_ctrl->curr_region_index);
+		a_ctrl->i2c_tbl_index = 0;
 		return rc;
 	}
 	a_ctrl->i2c_tbl_index = 0;
@@ -1109,7 +1216,7 @@ static int32_t msm_actuator_set_position(
 	int32_t index;
 	uint16_t next_lens_position;
 	uint16_t delay;
-	uint32_t hw_params = 0;
+	uint32_t hw_params = set_pos->hw_params;
 	struct msm_camera_i2c_reg_setting reg_setting;
 	CDBG("%s Enter %d\n", __func__, __LINE__);
 	if (set_pos->number_of_steps <= 0 ||
@@ -1164,7 +1271,7 @@ static int32_t msm_actuator_bivcm_set_position(
 	int32_t index;
 	uint16_t next_lens_position;
 	uint16_t delay;
-	uint32_t hw_params = 0;
+	uint32_t hw_params = set_pos->hw_params;
 	CDBG("%s Enter %d\n", __func__, __LINE__);
 	if (set_pos->number_of_steps <= 0 ||
 		set_pos->number_of_steps > MAX_NUMBER_OF_STEPS) {
@@ -1226,6 +1333,27 @@ static int32_t msm_actuator_set_param(struct msm_actuator_ctrl_t *a_ctrl,
 		a_ctrl->region_size * sizeof(struct region_params_t))) {
 		pr_err("Error copying region_params\n");
 		return -EFAULT;
+	}
+	{
+		/* Every SET_ACTUATOR_INFO, with the bytes as they arrived: the
+		 * step table is built from these and a wrong qvalue silently
+		 * turns every later CFG_MOVE_FOCUS into -EINVAL. */
+		static unsigned nset;
+		const unsigned char *raw =
+			(const unsigned char *)&a_ctrl->region_params[0];
+
+		if (nset < 8) {
+			nset++;
+			pr_err("talkman_act set_param n=%u compat=%d ptr=%pK initial=%d region_size=%u total=%u raw %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+			       nset, is_compat_task(),
+			       set_info->af_tuning_params.region_params,
+			       set_info->af_tuning_params.initial_code,
+			       a_ctrl->region_size,
+			       set_info->af_tuning_params.total_steps,
+			       raw[0], raw[1], raw[2], raw[3], raw[4], raw[5],
+			       raw[6], raw[7], raw[8], raw[9], raw[10],
+			       raw[11]);
+		}
 	}
 	if (a_ctrl->act_device_type == MSM_CAMERA_PLATFORM_DEVICE) {
 		cci_client = a_ctrl->i2c_client.cci_client;
@@ -1321,6 +1449,7 @@ static int32_t msm_actuator_set_param(struct msm_actuator_ctrl_t *a_ctrl,
 
 	a_ctrl->curr_step_pos = 0;
 	a_ctrl->curr_region_index = 0;
+	talkman_act_ctrl = a_ctrl;
 	CDBG("Exit\n");
 
 	return rc;
@@ -1535,6 +1664,19 @@ static long msm_actuator_subdev_do_ioctl(
 	void *parg = arg;
 	long rc;
 
+	/*
+	 * video_usercopy dispatches on the whole command word, size included, so
+	 * the compat struct has to be exactly the size userspace encodes.  The
+	 * daemon in this vendor image uses 204; at 200 (which is what this
+	 * header described before msm_actuator_set_position_t gained hw_params)
+	 * nothing matched VIDIOC_MSM_ACTUATOR_CFG32 and every actuator ioctl
+	 * came back ENOTTY.
+	 */
+	BUILD_BUG_ON(sizeof(struct msm_actuator_cfg_data32) != 204);
+	BUILD_BUG_ON(offsetof(struct msm_actuator_set_position_t,
+			      hw_params) != 4);
+	BUILD_BUG_ON(offsetof(struct msm_actuator_set_position_t, pos) != 8);
+
 	switch (cmd) {
 	case VIDIOC_MSM_ACTUATOR_CFG32:
 		cmd = VIDIOC_MSM_ACTUATOR_CFG;
@@ -1632,6 +1774,7 @@ static long msm_actuator_subdev_do_ioctl(
 			actuator_data.is_af_supported = u32->is_af_supported;
 			memcpy(&actuator_data.cfg.setpos, &(u32->cfg.setpos),
 				sizeof(struct msm_actuator_set_position_t));
+			parg = &actuator_data;
 			break;
 		default:
 			actuator_data.cfgtype = u32->cfgtype;
@@ -1940,6 +2083,20 @@ static struct msm_actuator msm_vcm_actuator_table = {
 		.actuator_set_default_focus = msm_actuator_set_default_focus,
 		.actuator_init_focus = msm_actuator_init_focus,
 		.actuator_parse_i2c_params = msm_actuator_parse_i2c_params,
+		.actuator_set_position = msm_actuator_set_position,
+		.actuator_park_lens = msm_actuator_park_lens,
+	},
+};
+
+static struct msm_actuator msm_vcm_be_actuator_table = {
+	.act_type = ACTUATOR_VCM_BE,
+	.func_tbl = {
+		.actuator_init_step_table = msm_actuator_init_step_table,
+		.actuator_move_focus = msm_actuator_move_focus,
+		.actuator_write_focus = msm_actuator_write_focus,
+		.actuator_set_default_focus = msm_actuator_set_default_focus,
+		.actuator_init_focus = msm_actuator_init_focus,
+		.actuator_parse_i2c_params = msm_actuator_parse_i2c_params_be,
 		.actuator_set_position = msm_actuator_set_position,
 		.actuator_park_lens = msm_actuator_park_lens,
 	},

@@ -153,6 +153,14 @@ enum actuator_type {
 	ACTUATOR_PIEZO,
 	ACTUATOR_HVCM,
 	ACTUATOR_BIVCM,
+	/*
+	 * A VCM whose DAC spans two registers big-endian, and which latches on
+	 * the write to the low half -- so the high half has to be written
+	 * first.  ACTUATOR_VCM emits the pair low-then-high, which on such a
+	 * part leaves the high half at whatever it was: the talkman lens takes
+	 * every low byte and ignores every high byte written after it.
+	 */
+	ACTUATOR_VCM_BE,
 };
 
 enum msm_flash_driver_type {

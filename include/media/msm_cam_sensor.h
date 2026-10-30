@@ -534,6 +534,14 @@ struct msm_ois_cfg_data {
 	} cfg;
 };
 
+/*
+ * hw_params is what the userspace side has always sent: the camera daemon in
+ * this vendor image fills it from the actuator library's damping table and
+ * sizes VIDIOC_MSM_ACTUATOR_CFG32 at 204 bytes accordingly.  Without the field
+ * the compat ioctl number came out 200, so no actuator ioctl ever matched
+ * VIDIOC_MSM_ACTUATOR_CFG32 and every one of them returned ENOTTY -- which
+ * surfaced only as "af_actuator_power_up failed" and a dead camera session.
+ */
 struct msm_actuator_set_position_t {
 	uint16_t number_of_steps;
 	uint32_t hw_params;
