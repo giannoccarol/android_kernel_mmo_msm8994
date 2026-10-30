@@ -86,9 +86,13 @@
 /*
  * microSD (sdhc_2), from the Windows ACPI description of \_SB.SDC2: the card
  * detect line (PM8994 GPIO 8) has no pull, and the low I/O level on LDO13 is
- * 1.85 V, the regulator's floor (common/regulator.dtsi). With the internal
- * 30 uA pull-up the slot never reported a card, and a 1.8 V request on L13
- * would fail the UHS voltage switch.
+ * 1.85 V, the regulator's floor (common/regulator.dtsi); a 1.8 V request on
+ * L13 would fail the UHS voltage switch.
+ *
+ * The detect line is high with a card in the tray and low with the tray
+ * removed (measured on a cityman, 30/10/2026). Declared active low, the slot
+ * saw the card for a moment while the tray went in and then dropped it as
+ * removed, so the polarity is active high.
  */
 &pm8994_gpios {
 	gpio@c700 { /* GPIO 8: SD card detect */
@@ -98,6 +102,7 @@
 
 &sdhc_2 {
 	qcom,vdd-io-voltage-level = <1850000 2950000>;
+	cd-gpios = <&pm8994_gpios 8 0x0>;	/* active high */
 };
 
 /*
