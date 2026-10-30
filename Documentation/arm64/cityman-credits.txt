@@ -43,6 +43,17 @@ Crash logs (pstore)
   allocated once (b32f68bcb4b, cherry-picked as is). On cityman the board
   override that moved ramoops elsewhere is dropped so it uses that region.
 
+USB FunctionFS AIO (Android 16 adbd)
+------------------------------------
+- Robert Baldyga (Samsung): "usb: gadget: f_fs: add aio support", Linux 3.15.
+- acroreiser (Yaroslav Zviezda): the 3.10 backport (46b42fd0e68 in this tree,
+  later reverted in 1b47b1a8025), also used by davigamer987 on
+  kernel_oneplus_msm8994 lineage-23.2 (c3e9d413d72, ep0 poll f9c17d5e0d7),
+  the working Android 16 reference on MSM8994. The port here is rewritten on
+  the current f_fs.c.
+- djokcho (73fe86913b4: ep0 poll, preallocated buffers) and sonic011gamer
+  (7df9f0a10d0: no_disconnect, v1+SS descriptors), Android4Lumia950.
+
 Not in this branch
 ------------------
 - archienz (github.com/archienz/android_kernel_mmo_msm8994): rear camera
