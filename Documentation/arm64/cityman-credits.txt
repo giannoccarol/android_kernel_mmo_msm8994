@@ -54,11 +54,18 @@ USB FunctionFS AIO (Android 16 adbd)
 - djokcho (73fe86913b4: ep0 poll, preallocated buffers) and sonic011gamer
   (7df9f0a10d0: no_disconnect, v1+SS descriptors), Android4Lumia950.
 
+Camera (rear lens and ION)
+--------------------------
+- hraj9258 (Himanshu Raj, github.com/hraj9258/android_kernel_mmo_msm8994,
+  talkman-cam-clean): ACTUATOR_VCM_BE for the rear lens controller, which
+  takes the high byte of the position first (01d0093, here with the enum it
+  needs from bb9466c), and the ION mapping guard page (0259b10).
+
 Not in this branch
 ------------------
 - archienz (github.com/archienz/android_kernel_mmo_msm8994): rear camera
   measurements on the Lumia 950 (CSI lane map 0x0423, 24 MHz MCLK), used on
   the lineage-18.1-cityman-camera branch.
 - hraj9258 (github.com/hraj9258/android_kernel_mmo_msm8994,
-  talkman-cam-clean): talkman rear camera bring-up, under evaluation for
-  cityman (only the pstore commit above is taken).
+  talkman-cam-clean): the rest of the talkman rear camera bring-up (kernel
+  SMIA++ sensor driver, CSID/ISP changes, Hill flash), under evaluation.
