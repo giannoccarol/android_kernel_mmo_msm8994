@@ -82,3 +82,20 @@
 			< 1958400  7904 >;
 	};
 };
+
+/*
+ * microSD (sdhc_2), from the Windows ACPI description of \_SB.SDC2: the card
+ * detect line (PM8994 GPIO 8) has no pull, and the low I/O level on LDO13 is
+ * 1.85 V, the regulator's floor (common/regulator.dtsi). With the internal
+ * 30 uA pull-up the slot never reported a card, and a 1.8 V request on L13
+ * would fail the UHS voltage switch.
+ */
+&pm8994_gpios {
+	gpio@c700 { /* GPIO 8: SD card detect */
+		qcom,pull = <5>;		/* no pull */
+	};
+};
+
+&sdhc_2 {
+	qcom,vdd-io-voltage-level = <1850000 2950000>;
+};
