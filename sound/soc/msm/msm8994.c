@@ -2265,7 +2265,12 @@ static int msm_snd_hw_params(struct snd_pcm_substream *substream,
 	struct snd_soc_dai_link *dai_link = rtd->dai_link;
 
 	int ret = 0;
-	u32 rx_ch[SLIM_MAX_RX_PORTS], tx_ch[SLIM_MAX_TX_PORTS];
+	/*
+	 * Zeroed: the codec only fills the ports routed to this AIF, and the
+	 * rest used to reach the ADSP as stack garbage, which it rejects as an
+	 * out-of-range shared channel (AFE_PORT_CMD_DEVICE_START -> EFAILED).
+	 */
+	u32 rx_ch[SLIM_MAX_RX_PORTS] = {0}, tx_ch[SLIM_MAX_TX_PORTS] = {0};
 	u32 rx_ch_cnt = 0, tx_ch_cnt = 0;
 	u32 user_set_tx_ch = 0;
 
@@ -2276,6 +2281,13 @@ static int msm_snd_hw_params(struct snd_pcm_substream *substream,
 		if (ret < 0) {
 			pr_err("%s: failed to get codec chan map, err:%d\n",
 				__func__, ret);
+			goto end;
+		}
+		if (rx_ch_cnt < msm_slim_0_rx_ch) {
+			pr_err("%s: SLIM_0_RX wants %d channels, only %u codec ports routed to %s\n",
+			       __func__, msm_slim_0_rx_ch, rx_ch_cnt,
+			       codec_dai->name);
+			ret = -EINVAL;
 			goto end;
 		}
 		ret = snd_soc_dai_set_channel_map(cpu_dai, 0, 0,
@@ -2318,6 +2330,13 @@ static int msm_snd_hw_params(struct snd_pcm_substream *substream,
 			__func__, msm_slim_0_tx_ch, user_set_tx_ch,
 			tx_ch_cnt, dai_link->be_id);
 
+		if (tx_ch_cnt < user_set_tx_ch) {
+			pr_err("%s: be_id %d wants %u TX channels, only %u codec ports routed to %s\n",
+			       __func__, dai_link->be_id, user_set_tx_ch,
+			       tx_ch_cnt, codec_dai->name);
+			ret = -EINVAL;
+			goto end;
+		}
 		ret = snd_soc_dai_set_channel_map(cpu_dai,
 						  user_set_tx_ch, tx_ch, 0 , 0);
 		if (ret < 0) {
