@@ -99,3 +99,13 @@
 &sdhc_2 {
 	qcom,vdd-io-voltage-level = <1850000 2950000>;
 };
+
+/*
+ * L23 feeds only the rear camera's focus actuator (cam_vaf). Kept always on,
+ * it powers the actuator while the camera is closed and its driver has not
+ * set it up, and the voice coil whistles. The camera and actuator drivers
+ * switch it on when a session starts.
+ */
+&pm8994_l23 {
+	/delete-property/ regulator-always-on;
+};
