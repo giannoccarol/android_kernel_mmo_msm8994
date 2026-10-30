@@ -247,6 +247,9 @@ int register_shrinker(struct shrinker *shrinker)
 	down_write(&shrinker_rwsem);
 	list_add_tail(&shrinker->list, &shrinker_list);
 	up_write(&shrinker_rwsem);
+	pr_info("shrinker: %p registered by %pS (count=%pF scan=%pF shrink=%pF)\n",
+		shrinker, __builtin_return_address(0), shrinker->count_objects,
+		shrinker->scan_objects, shrinker->shrink);
 	return 0;
 }
 EXPORT_SYMBOL(register_shrinker);
@@ -265,6 +268,8 @@ late_initcall(add_shrinker_debug);
  */
 void unregister_shrinker(struct shrinker *shrinker)
 {
+	pr_info("shrinker: %p unregistered by %pS\n", shrinker,
+		__builtin_return_address(0));
 	down_write(&shrinker_rwsem);
 	list_del(&shrinker->list);
 	up_write(&shrinker_rwsem);
@@ -277,6 +282,26 @@ static inline int do_shrinker_shrink(struct shrinker *shrinker,
 {
 	sc->nr_to_scan = nr_to_scan;
 	return (*shrinker->shrink)(shrinker, sc);
+}
+
+/*
+ * Android 16 bring-up: a shrinker list entry with a non-text callback
+ * (count_objects = 0x100000000) took kswapd down in shrink_slab(). Refuse
+ * such entries with a report instead of jumping into garbage.
+ */
+static bool shrinker_callbacks_valid(struct shrinker *s)
+{
+	if (!s->count_objects && !s->shrink)
+		return false;
+	if (s->count_objects &&
+	    !kernel_text_address((unsigned long)s->count_objects))
+		return false;
+	if (s->scan_objects &&
+	    !kernel_text_address((unsigned long)s->scan_objects))
+		return false;
+	if (s->shrink && !kernel_text_address((unsigned long)s->shrink))
+		return false;
+	return true;
 }
 
 #define SHRINK_BATCH 128
@@ -433,6 +458,13 @@ unsigned long shrink_slab(struct shrink_control *shrinkctl,
 	}
 
 	list_for_each_entry(shrinker, &shrinker_list, list) {
+		if (!shrinker_callbacks_valid(shrinker)) {
+			pr_err_ratelimited("shrinker: bad entry %p (count=%p scan=%p shrink=%p next=%p prev=%p), stopping slab shrink\n",
+				shrinker, shrinker->count_objects,
+				shrinker->scan_objects, shrinker->shrink,
+				shrinker->list.next, shrinker->list.prev);
+			break;
+		}
 		for_each_node_mask(shrinkctl->nid, shrinkctl->nodes_to_scan) {
 			if (!node_online(shrinkctl->nid))
 				continue;
