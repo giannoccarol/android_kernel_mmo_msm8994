@@ -318,9 +318,31 @@ int main(int argc, char **argv)
 		int signature;
 
 		if (request(uim, QMI_UIM_GET_CARD_STATUS, NULL, 0)) {
-			if (++failures == 6)
+			/*
+			 * A transport error usually means qmuxd or the modem
+			 * restarted: the client is dead, so open a new one at
+			 * once instead of waiting. While the PIN is being
+			 * entered a slow recovery delays Subscription OK and
+			 * Android shows the PIN screen a second time.
+			 */
+			if (++failures == 30)
 				break;
-			sleep(5);
+			qmi_release(uim);
+			uim = NULL;
+			usleep(500 * 1000);
+			if (open_client(uim_object, &params[0], &uim)) {
+				uim = NULL;
+				sleep(1);
+				for (attempt = 0; !uim && attempt < 10; attempt++) {
+					if (!open_client(uim_object, &params[0], &uim))
+						break;
+					uim = NULL;
+					sleep(1);
+				}
+				if (!uim)
+					break;
+			}
+			LOG("UIM client reopened");
 			continue;
 		}
 		failures = 0;
@@ -484,6 +506,7 @@ next:
 		qmi_release(nas);
 	if (dms)
 		qmi_release(dms);
-	qmi_release(uim);
+	if (uim)
+		qmi_release(uim);
 	return done;
 }
