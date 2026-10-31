@@ -61,6 +61,24 @@ Camera (rear lens and ION)
   takes the high byte of the position first (01d0093, here with the enum it
   needs from bb9466c), and the ION mapping guard page (0259b10).
 
+Double tap to wake (touch controller)
+-------------------------------------
+- WOA-Project/SynapticsTouch (github.com/WOA-Project/SynapticsTouch;
+  Bingxing Wang and the LumiaWoA authors, on the Microsoft sample driver):
+  the F12 CTRL20 byte 2 sequence (0x02 screen off, 0x00 screen on) and the
+  F12 DATA4 double tap code (0x03) on the Lumia 950 XL, src/power.c and
+  src/rmi4/f12/function12.c. The double tap timing (350 ms, 3 mm) and the
+  controller reset on wake come from the Microsoft Windows driver package
+  of the 950 XL (cityman_SynapticsTouch.inf).
+- Synaptics DSX 2.5 (Synaptics Inc.) as shipped in the Nexus 6P kernel
+  (github.com/Android4Lumia950/angler-1, android-msm-angler-3.10,
+  drivers/input/touchscreen/synaptics_dsx25/synaptics_dsx_core.c): the
+  CTRL20/CTRL27/DATA4 offsets from the F12 query 5 and query 8 bitmaps,
+  the KEY_WAKEUP report and the wake interrupt handling.
+- OnePlus and LineageOS (github.com/LineageOS/android_kernel_oneplus_msm8994,
+  lineage-18.0, synaptics_driver_s3320.c): gesture enable through CTRL20 on
+  another MSM8994 phone, as a reference for the suspend/resume sequence.
+
 Not in this branch
 ------------------
 - archienz (github.com/archienz/android_kernel_mmo_msm8994): rear camera
