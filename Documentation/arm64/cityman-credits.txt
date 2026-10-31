@@ -61,6 +61,21 @@ Camera (rear lens and ION)
   takes the high byte of the position first (01d0093, here with the enum it
   needs from bb9466c), and the ION mapping guard page (0259b10).
 
+Camera (rear flash)
+-------------------
+- hraj9258 (Himanshu Raj, github.com/hraj9258/android_kernel_mmo_msm8994,
+  talkman-cam-clean, bb9466c): the "Hill" flash IC of the Lumia 950 found at
+  8-bit 0x60 on CCI master 0 (ID 0x16), its register map recovered from
+  qccamflash8992.sys, the generic device tree binding for an I2C flash in
+  msm_flash.c, the four fixes to its I2C path, the off timeout and the heat
+  budget, the hill.c LED class torch, and the register values the cityman
+  node reuses. His userspace library flash_lib_hill.c
+  (gitlab.com/hraj9258/android_device_msft_talkman, lineage-18.1-talkman)
+  is built by the cityman device tree as libflash_hill.
+- Cityman evidence for the same wiring (DSDT FLSH/FLHT, qccamflash8994.sys
+  from RM1085 1078.0053.10586.13169.12742.034EE8) is described in
+  arch/arm64/boot/dts/mmo/common/camera-cityman.dtsi.
+
 Double tap to wake (touch controller)
 -------------------------------------
 - WOA-Project/SynapticsTouch (github.com/WOA-Project/SynapticsTouch;
@@ -86,4 +101,5 @@ Not in this branch
   the lineage-18.1-cityman-camera branch.
 - hraj9258 (github.com/hraj9258/android_kernel_mmo_msm8994,
   talkman-cam-clean): the rest of the talkman rear camera bring-up (kernel
-  SMIA++ sensor driver, CSID/ISP changes, Hill flash), under evaluation.
+  SMIA++ sensor driver, CSID/ISP changes, the frame-synchronised flash
+  trigger in the ISP), under evaluation.

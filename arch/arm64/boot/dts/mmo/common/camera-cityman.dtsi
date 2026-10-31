@@ -29,17 +29,107 @@
  * not known yet.
  */
 
-&soc {
-	led_flash0: qcom,camera-flash {
-		cell-index = <0>;
-		compatible = "qcom,camera-flash";
-		qcom,flash-type = <1>;
-		qcom,flash-source = <&pmi8994_flash0 &pmi8994_flash1>;
-		qcom,torch-source = <&pmi8994_torch0 &pmi8994_torch1>;
-	};
-};
+/*
+ * Rear flash.
+ *
+ * The rear LEDs are not on PMI8994.  The DSDT has two flash devices:
+ *
+ *   FLSH  QCOM244B  _DEP CAMF, CAMS  no resources at all
+ *   FLHT  QCOM244C  _DEP CAMT, FLSH  PM02 interrupts 0xe9e/0xe9f
+ *
+ * 0xe9e/0xe9f are bits 6/7 of PMIC peripheral 0x1d3, i.e. PMI8994's flash
+ * block at 0xd300, and FLHT is the "tertiary" flash that follows CAMT, the
+ * iris camera.  The rear flash, FLSH, has no PMIC resource and is driven by
+ * qccamflash8994.sys over the camera platform's CCI, the same arrangement
+ * as the Lumia 950 (talkman): Nokia's WhiteLEDFlashDriver, which probes
+ * register 0 at 8-bit 0x60 and expects 0x16 for the "Hill" three-channel
+ * driver.  That is why the qcom,camera-flash node copied from the MTP
+ * (qcom,flash-source = <&pmi8994_flash0 &pmi8994_flash1>) lit nothing at
+ * the back: led:torch_0/1 most likely drive the iris illuminator.
+ *
+ * Hill's address, CCI master and register map are taken from the Lumia 950,
+ * where they were measured on the hardware; both nodes below read the ID
+ * register before the first write, so a different part is reported in
+ * dmesg instead of being driven.  GPIO 12 is in the CAMP resource list here
+ * as on the 950, where it is the flash pin of the schematic; Hill lights
+ * with it low.
+ */
 
 &cci {
+	/*
+	 * Hill through msm_flash.c (subdev group 16), the only flash the
+	 * camera daemon can see.  The daemon takes the address, power
+	 * sequence and register arrays from libflash_hill.so; the properties
+	 * below are the fallback for the HAL torch (QCameraFlash), which opens
+	 * this subdev directly and sends no register settings.
+	 *
+	 *   0x02/0x03/0x04  LED1/2/3 current, torch level in bits [7:5]
+	 *   0x05            mode: 0x00 power on, 0x04 power off, 0x19 normal
+	 *   0x06            VPH_PWR droop compensation
+	 *   0x07            safety timer code
+	 *   0x08            enable: 0x03 standby, 0x06 torch, 0x07 flash
+	 *
+	 * Torch level 4 (0x80) for low, level 7 (0xe0) in torch mode for high:
+	 * msm_flash.c switches a high setting off after flash_high_timeout_ms.
+	 */
+	camera_flash_hill: qcom,camera-flash@0 {
+		cell-index = <0>;
+		compatible = "qcom,camera-flash";
+		qcom,cci-master = <0>;
+		gpios = <&msm_gpio 12 0>;
+		qcom,gpio-flash-en = <0>;
+		qcom,gpio-req-tbl-num = <0>;
+		qcom,gpio-req-tbl-flags = <0>;
+		qcom,gpio-req-tbl-label = "CAM_FLASH_EN";
+		qcom,flash-slave-addr = <0x60>;
+		qcom,flash-addr-type = <1>;	/* MSM_CAMERA_I2C_BYTE_ADDR */
+		qcom,flash-data-type = <1>;	/* MSM_CAMERA_I2C_BYTE_DATA */
+		qcom,flash-id = <0x00 0x16>;
+		qcom,flash-init-setting = /bits/ 16 <0x05 0x00>;
+		qcom,flash-off-setting  = /bits/ 16 <0x08 0x03
+						     0x05 0x04>;
+		qcom,flash-low-setting  = /bits/ 16 <0x02 0x80
+						     0x03 0x80
+						     0x04 0x80
+						     0x05 0x19
+						     0x06 0x00
+						     0x07 0x00
+						     0x08 0x06>;
+		qcom,flash-high-setting = /bits/ 16 <0x02 0xe0
+						     0x03 0xe0
+						     0x04 0xe0
+						     0x05 0x19
+						     0x06 0x00
+						     0x07 0x00
+						     0x08 0x06>;
+		status = "ok";
+	};
+
+	/*
+	 * The same part through the older msm_led_flash framework (hill.c),
+	 * for /sys/class/leds/flash-torch: a flashlight that needs no camera
+	 * stack, and a way to check the hardware with the kernel alone.
+	 * Its group (11) is invisible to the daemon.  Do not use it while a
+	 * camera session holds GPIO 12.
+	 */
+	led_flash_hill: qcom,led-flash@60 {
+		cell-index = <0>;
+		reg = <0x60>;
+		compatible = "qcom,led-flash-hill";
+		label = "hill";
+		qcom,slave-id = <0x60 0x00 0x16>;
+		qcom,flash-type = <1>;
+		qcom,cci-master = <0>;
+		gpios = <&msm_gpio 12 0>;
+		qcom,gpio-flash-en = <0>;
+		qcom,gpio-req-tbl-num = <0>;
+		qcom,gpio-req-tbl-flags = <0>;
+		qcom,gpio-req-tbl-label = "CAM_FLASH_EN";
+		qcom,max-current = <1000>;
+		qcom,max-duration = <1280>;
+		status = "ok";
+	};
+
 	/*
 	 * AF and OIS live in one controller inside the rear Carrera module,
 	 * on the rear sensor's CCI master. The Windows SMIA++ driver talks to
@@ -84,6 +174,7 @@
 		qcom,csid-sd-index = <0>;
 		qcom,mount-angle = <270>;
 		qcom,actuator-src = <&actuator0>;
+		qcom,led-flash-src = <&camera_flash_hill>;
 		cam_vaf-supply = <&pm8994_l23>;
 		cam_vana-supply = <&pm8994_l29>;
 		cam_vdig-supply = <&pm8994_l25>;
