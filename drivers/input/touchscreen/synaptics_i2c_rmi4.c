@@ -412,6 +412,9 @@ struct synaptics_rmi4_f1a_handle {
 
 struct synaptics_rmi4_f12_extra_data {
 	unsigned char data1_offset;
+	unsigned char data4_offset;
+	unsigned char ctrl18_offset;
+	unsigned char ctrl20_offset;
 	unsigned char data15_offset;
 	unsigned char data15_size;
 	unsigned char data15_data[(F12_FINGERS_TO_SUPPORT + 7) / 8];
@@ -2155,6 +2158,8 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 	unsigned char size_of_2d_data;
 	unsigned char size_of_query8;
 	unsigned char ctrl_8_offset;
+	unsigned char ctrl_18_offset;
+	unsigned char ctrl_20_offset;
 	unsigned char ctrl_23_offset;
 	unsigned char ctrl_28_offset;
 	unsigned char num_of_fingers;
@@ -2193,7 +2198,7 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 			query_5.ctrl6_is_present +
 			query_5.ctrl7_is_present;
 
-	ctrl_23_offset = ctrl_8_offset +
+	ctrl_18_offset = ctrl_8_offset +
 			query_5.ctrl8_is_present +
 			query_5.ctrl9_is_present +
 			query_5.ctrl10_is_present +
@@ -2203,9 +2208,13 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 			query_5.ctrl14_is_present +
 			query_5.ctrl15_is_present +
 			query_5.ctrl16_is_present +
-			query_5.ctrl17_is_present +
+			query_5.ctrl17_is_present;
+
+	ctrl_20_offset = ctrl_18_offset +
 			query_5.ctrl18_is_present +
-			query_5.ctrl19_is_present +
+			query_5.ctrl19_is_present;
+
+	ctrl_23_offset = ctrl_20_offset +
 			query_5.ctrl20_is_present +
 			query_5.ctrl21_is_present +
 			query_5.ctrl22_is_present;
@@ -2238,6 +2247,10 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 	if (retval < 0)
 		goto free_function_handler_mem;
 
+	memset(query_8.data, 0, sizeof(query_8.data));
+	if (size_of_query8 > sizeof(query_8.data))
+		size_of_query8 = sizeof(query_8.data);
+
 	retval = synaptics_rmi4_i2c_read(rmi4_data,
 			fhandler->full_addr.query_base + 8,
 			query_8.data,
@@ -2267,6 +2280,57 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 		extra_data->data15_size = (num_of_fingers + 7) / 8;
 	} else {
 		extra_data->data15_size = 0;
+	}
+
+	/*
+	 * Wakeup gesture support (as in Synaptics DSX 2.5): the firmware
+	 * advertises it with F12 CTRL27, the gesture mode is selected in
+	 * byte 2 of CTRL20 and the detected gesture is reported in DATA4.
+	 */
+	extra_data->ctrl18_offset = ctrl_18_offset;
+	extra_data->ctrl20_offset = ctrl_20_offset;
+	extra_data->data4_offset = query_8.data0_is_present +
+			query_8.data1_is_present +
+			query_8.data2_is_present +
+			query_8.data3_is_present;
+	rmi4_data->f12_wakeup_gesture = query_5.ctrl27_is_present &&
+			query_5.ctrl20_is_present &&
+			query_8.data4_is_present;
+
+	dev_info(&rmi4_data->i2c_client->dev,
+		"%s: F12 query5 %*ph query8 %*ph, ctrl18 %s@%u ctrl20 %s@%u ctrl27 %s, data4 %s@%u, wakeup gesture %s\n",
+		__func__,
+		(int)sizeof(query_5.data), query_5.data,
+		(int)size_of_query8, query_8.data,
+		query_5.ctrl18_is_present ? "yes" : "no", ctrl_18_offset,
+		query_5.ctrl20_is_present ? "yes" : "no", ctrl_20_offset,
+		query_5.ctrl27_is_present ? "yes" : "no",
+		query_8.data4_is_present ? "yes" : "no",
+		extra_data->data4_offset,
+		rmi4_data->f12_wakeup_gesture ? "supported" : "absent");
+
+	if (query_5.ctrl20_is_present) {
+		unsigned char ctrl20[3];
+
+		if (synaptics_rmi4_i2c_read(rmi4_data,
+				fhandler->full_addr.ctrl_base + ctrl_20_offset,
+				ctrl20, sizeof(ctrl20)) >= 0)
+			dev_info(&rmi4_data->i2c_client->dev,
+				"%s: F12 ctrl20 (0x%04x) = %*ph\n", __func__,
+				fhandler->full_addr.ctrl_base + ctrl_20_offset,
+				(int)sizeof(ctrl20), ctrl20);
+	}
+
+	if (query_5.ctrl18_is_present) {
+		unsigned char ctrl18[10];
+
+		if (synaptics_rmi4_i2c_read(rmi4_data,
+				fhandler->full_addr.ctrl_base + ctrl_18_offset,
+				ctrl18, sizeof(ctrl18)) >= 0)
+			dev_info(&rmi4_data->i2c_client->dev,
+				"%s: F12 ctrl18 (0x%04x) = %*ph\n", __func__,
+				fhandler->full_addr.ctrl_base + ctrl_18_offset,
+				(int)sizeof(ctrl18), ctrl18);
 	}
 
 	rmi4_data->report_enable = RPT_DEFAULT;

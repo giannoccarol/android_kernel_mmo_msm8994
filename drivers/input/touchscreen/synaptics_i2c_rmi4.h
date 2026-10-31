@@ -258,6 +258,7 @@ struct synaptics_rmi4_data {
 	bool flip_y;
 	bool fw_updating;
 	bool suspended;
+	bool f12_wakeup_gesture;
 	wait_queue_head_t wait;
 	bool stay_awake;
 	bool staying_awake;
