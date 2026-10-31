@@ -1,0 +1,50 @@
+Lumia 950 XL (Cityman) Venus video firmware
+===========================================
+
+The Venus image that came with the angler/bullhead vendor blobs fails
+authentication on this phone: the subsystem stays OFFLINE, msm_vidc cannot
+open a session (ENOMEM from /dev/video32) and Android drops every
+OMX.qcom video codec, so all video decoding and encoding falls back to
+software. The Cityman image, signed for this hardware, replaces it.
+
+Its code segments (venus.b00, b02-b04) are byte-identical to the angler
+ones; only the signed hash segment (venus.b01) and the headers in
+venus.mdt differ.
+
+Reproducible source and extraction
+----------------------------------
+Use qcvss8994.mbn from Android4Lumia950/firmware-microsoft-cityman, commit:
+  f489e275f1d32656c00a289ba57917735edff3bd
+Source:
+  https://github.com/Android4Lumia950/firmware-microsoft-cityman/blob/f489e275f1d32656c00a289ba57917735edff3bd/qcvss8994.mbn
+Size: 1002800 bytes
+SHA-256:
+  7db914db3d76f599926c2ce557046baa6b36615f28cc500c715b76c1a33b0182
+
+No firmware binary is distributed with this kernel change. Run from the
+kernel source root:
+
+  python3 tools/cityman-ril/split-cityman-venus.py qcvss8994.mbn /tmp/cityman-venus
+  (cd /tmp/cityman-venus && sha256sum -c sha256sums.txt)
+
+The tool works like split-cityman-adsp.py (see cityman-adsp.txt): it
+rejects any other input and writes venus.mdt, venus.b00-b04 and a SHA-256
+manifest without changing any content.
+
+Memory
+------
+Venus and the ADSP both allocate from peripheral_mem (0x0ca00000, 31 MiB).
+Both images are relocatable: the ADSP needs about 24 MiB and Venus about
+5 MiB, so they fit together.
+
+Driver fix
+----------
+venus_hfi_load_fw() cached the error pointer returned by a failed
+subsystem_get("venus") and never called it again, so one failure at boot
+disabled video until the next reboot. It now clears the cookie so the next
+session retries.
+
+Credits
+-------
+Android4Lumia950 (djokcho, EpicLPer, j0sh1x and the community):
+firmware-microsoft-cityman, the source of qcvss8994.mbn.
