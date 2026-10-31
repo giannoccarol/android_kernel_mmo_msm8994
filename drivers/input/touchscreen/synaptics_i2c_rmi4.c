@@ -80,6 +80,26 @@
 #define NO_SLEEP_OFF 0
 #define NO_SLEEP_ON 1
 
+/*
+ * F12 wakeup gesture (double tap to wake). Byte 2 of CTRL20 selects the
+ * reporting mode, DATA4 byte 0 reports the detected gesture. CTRL18 holds
+ * the double tap zone (bytes 0-7), the maximum time between the taps in
+ * 10 ms units (byte 8) and the maximum distance in 0.1 mm units (byte 9).
+ * The Windows driver package of the Lumia 950 XL uses 350 ms and 3 mm.
+ */
+#define F12_CTRL20_SIZE 3
+#define F12_CONTINUOUS_MODE 0x00
+#define F12_WAKEUP_GESTURE_MODE 0x02
+#define F12_DATA4_SIZE 5
+#define F12_GESTURE_DOUBLE_TAP 0x03
+#define F12_CTRL18_DTAP_SIZE 10
+#define F12_CTRL18_MAX_TAP_TIME 8
+#define F12_CTRL18_MAX_TAP_DIST 9
+#define F12_DTAP_MAX_TAP_TIME 0x23 /* 350 ms */
+#define F12_DTAP_MAX_TAP_DIST 0x1e /* 3 mm */
+#define WAKE_GESTURE_EVENT_MS 1000
+#define WAKE_GESTURE_I2C_WAIT_MS 1000
+
 enum device_status {
 	STATUS_NO_ERROR = 0x00,
 	STATUS_RESET_OCCURED = 0x01,
@@ -185,6 +205,12 @@ static ssize_t synaptics_rmi4_flipy_show(struct device *dev,
 		struct device_attribute *attr, char *buf);
 
 static ssize_t synaptics_rmi4_flipy_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count);
+
+static ssize_t synaptics_rmi4_wake_gesture_show(struct device *dev,
+		struct device_attribute *attr, char *buf);
+
+static ssize_t synaptics_rmi4_wake_gesture_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count);
 
 static int synaptics_rmi4_capacitance_button_map(
@@ -415,6 +441,7 @@ struct synaptics_rmi4_f12_extra_data {
 	unsigned char data4_offset;
 	unsigned char ctrl18_offset;
 	unsigned char ctrl20_offset;
+	bool ctrl18_present;
 	unsigned char data15_offset;
 	unsigned char data15_size;
 	unsigned char data15_data[(F12_FINGERS_TO_SUPPORT + 7) / 8];
@@ -455,6 +482,9 @@ static struct device_attribute attrs[] = {
 	__ATTR(flipy, (S_IRUGO | S_IWUSR | S_IWGRP),
 			synaptics_rmi4_flipy_show,
 			synaptics_rmi4_flipy_store),
+	__ATTR(wake_gesture, (S_IRUGO | S_IWUSR | S_IWGRP),
+			synaptics_rmi4_wake_gesture_show,
+			synaptics_rmi4_wake_gesture_store),
 #if defined(CONFIG_SECURE_TOUCH)
 	__ATTR(secure_touch_enable, (S_IRUGO | S_IWUSR | S_IWGRP),
 			synaptics_secure_touch_enable_show,
@@ -951,6 +981,48 @@ static ssize_t synaptics_rmi4_flipy_store(struct device *dev,
 	return count;
 }
 
+static ssize_t synaptics_rmi4_wake_gesture_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%u\n", rmi4_data->wake_gesture);
+}
+
+static ssize_t synaptics_rmi4_wake_gesture_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	unsigned int input;
+	bool enable;
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+
+	if (kstrtouint(buf, 10, &input))
+		return -EINVAL;
+
+	enable = input > 0;
+	if (enable && !rmi4_data->f12_wakeup_gesture)
+		return -ENODEV;
+
+	mutex_lock(&rmi4_data->pm_mutex);
+	if (rmi4_data->wake_gesture != enable)
+		dev_info(dev, "%s: wake gesture %s\n", __func__,
+				enable ? "enabled" : "disabled");
+	rmi4_data->wake_gesture = enable;
+
+	/*
+	 * Disabled while the screen is off and the gesture is armed: leave
+	 * the gesture mode and complete the normal (powered down) suspend.
+	 * Enabling while the screen is off takes effect at the next blank.
+	 */
+	if (!enable && rmi4_data->wake_gesture_armed) {
+		synaptics_rmi4_resume(&rmi4_data->input_dev->dev);
+		synaptics_rmi4_suspend(&rmi4_data->input_dev->dev);
+	}
+	mutex_unlock(&rmi4_data->pm_mutex);
+
+	return count;
+}
+
  /**
  * synaptics_rmi4_set_page()
  *
@@ -1275,6 +1347,210 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 	return touch_count;
 }
 
+static struct synaptics_rmi4_fn *synaptics_rmi4_find_fn(
+		struct synaptics_rmi4_data *rmi4_data, unsigned char fn_number)
+{
+	struct synaptics_rmi4_fn *fhandler;
+	struct synaptics_rmi4_fn *found = NULL;
+	struct synaptics_rmi4_device_info *rmi = &rmi4_data->rmi4_mod_info;
+
+	mutex_lock(&rmi->support_fn_list_mutex);
+	list_for_each_entry(fhandler, &rmi->support_fn_list, link) {
+		if (fhandler->fn_number == fn_number) {
+			found = fhandler;
+			break;
+		}
+	}
+	mutex_unlock(&rmi->support_fn_list_mutex);
+
+	return found;
+}
+
+/*
+ * Program the double tap timing used by the Windows driver of the
+ * Lumia 950 XL into F12 CTRL18. The register is reset to the firmware
+ * defaults (800 ms, 3 mm on build 0x2000CA) on every power cycle.
+ */
+static void synaptics_rmi4_f12_dtap_params(
+		struct synaptics_rmi4_data *rmi4_data,
+		struct synaptics_rmi4_fn *fhandler)
+{
+	int retval;
+	unsigned short addr;
+	unsigned char ctrl18[F12_CTRL18_DTAP_SIZE];
+	struct synaptics_rmi4_f12_extra_data *extra_data = fhandler->extra;
+
+	if (!extra_data->ctrl18_present)
+		return;
+
+	addr = fhandler->full_addr.ctrl_base + extra_data->ctrl18_offset;
+	retval = synaptics_rmi4_i2c_read(rmi4_data, addr, ctrl18,
+			sizeof(ctrl18));
+	if (retval < 0)
+		return;
+
+	if (ctrl18[F12_CTRL18_MAX_TAP_TIME] == F12_DTAP_MAX_TAP_TIME &&
+		ctrl18[F12_CTRL18_MAX_TAP_DIST] == F12_DTAP_MAX_TAP_DIST)
+		return;
+
+	ctrl18[F12_CTRL18_MAX_TAP_TIME] = F12_DTAP_MAX_TAP_TIME;
+	ctrl18[F12_CTRL18_MAX_TAP_DIST] = F12_DTAP_MAX_TAP_DIST;
+	retval = synaptics_rmi4_i2c_write(rmi4_data, addr, ctrl18,
+			sizeof(ctrl18));
+	if (retval < 0) {
+		dev_err(&rmi4_data->i2c_client->dev,
+				"%s: Failed to write F12 ctrl18\n", __func__);
+		return;
+	}
+
+	retval = synaptics_rmi4_i2c_read(rmi4_data, addr, ctrl18,
+			sizeof(ctrl18));
+	if (retval >= 0)
+		dev_info(&rmi4_data->i2c_client->dev,
+				"%s: F12 ctrl18 = %*ph\n", __func__,
+				(int)sizeof(ctrl18), ctrl18);
+}
+
+/*
+ * Select the F12 reporting mode in CTRL20 byte 2: wakeup gesture mode
+ * while the screen is off, continuous reporting otherwise. The F01
+ * device control is kept in normal operation without "no sleep", so the
+ * controller can doze between scans. Returns 0 when the read back value
+ * matches.
+ */
+static int synaptics_rmi4_wakeup_gesture(struct synaptics_rmi4_data *rmi4_data,
+		bool enable)
+{
+	int retval;
+	unsigned short addr;
+	unsigned char mode;
+	unsigned char ctrl20[F12_CTRL20_SIZE];
+	struct synaptics_rmi4_f01_device_control_0 device_ctrl;
+	struct synaptics_rmi4_f12_extra_data *extra_data;
+	struct synaptics_rmi4_fn *fhandler;
+
+	fhandler = synaptics_rmi4_find_fn(rmi4_data, SYNAPTICS_RMI4_F12);
+	if (!fhandler || !fhandler->extra)
+		return -ENODEV;
+	extra_data = fhandler->extra;
+
+	retval = synaptics_rmi4_i2c_read(rmi4_data,
+			rmi4_data->f01_ctrl_base_addr,
+			device_ctrl.data,
+			sizeof(device_ctrl.data));
+	if (retval < 0)
+		return retval;
+
+	if (device_ctrl.sleep_mode != NORMAL_OPERATION ||
+			device_ctrl.nosleep != NO_SLEEP_OFF) {
+		device_ctrl.sleep_mode = NORMAL_OPERATION;
+		device_ctrl.nosleep = NO_SLEEP_OFF;
+		retval = synaptics_rmi4_i2c_write(rmi4_data,
+				rmi4_data->f01_ctrl_base_addr,
+				device_ctrl.data,
+				sizeof(device_ctrl.data));
+		if (retval < 0)
+			return retval;
+	}
+	rmi4_data->sensor_sleep = false;
+
+	if (enable)
+		synaptics_rmi4_f12_dtap_params(rmi4_data, fhandler);
+
+	addr = fhandler->full_addr.ctrl_base + extra_data->ctrl20_offset;
+	mode = enable ? F12_WAKEUP_GESTURE_MODE : F12_CONTINUOUS_MODE;
+
+	retval = synaptics_rmi4_i2c_read(rmi4_data, addr, ctrl20,
+			sizeof(ctrl20));
+	if (retval < 0)
+		return retval;
+
+	ctrl20[2] = mode;
+	retval = synaptics_rmi4_i2c_write(rmi4_data, addr, ctrl20,
+			sizeof(ctrl20));
+	if (retval < 0)
+		return retval;
+
+	retval = synaptics_rmi4_i2c_read(rmi4_data, addr, ctrl20,
+			sizeof(ctrl20));
+	if (retval < 0)
+		return retval;
+
+	retval = synaptics_rmi4_i2c_read(rmi4_data,
+			rmi4_data->f01_ctrl_base_addr,
+			device_ctrl.data,
+			sizeof(device_ctrl.data));
+	if (retval < 0)
+		return retval;
+
+	dev_info(&rmi4_data->i2c_client->dev,
+			"%s: %s: F12 ctrl20 (0x%04x) = %*ph, F01 ctrl0 = 0x%02x\n",
+			__func__, enable ? "armed" : "disarmed", addr,
+			(int)sizeof(ctrl20), ctrl20, device_ctrl.data[0]);
+
+	return ctrl20[2] == mode ? 0 : -EIO;
+}
+
+/*
+ * Called from the interrupt thread while the wakeup gesture is armed:
+ * a double tap reported in F12 DATA4 becomes a KEY_WAKEUP press.
+ */
+static void synaptics_rmi4_f12_gesture_report(
+		struct synaptics_rmi4_data *rmi4_data,
+		struct synaptics_rmi4_fn *fhandler)
+{
+	int retval;
+	unsigned short addr;
+	unsigned char gesture[F12_DATA4_SIZE];
+	unsigned char ctrl20[F12_CTRL20_SIZE];
+	struct synaptics_rmi4_f12_extra_data *extra_data = fhandler->extra;
+
+	retval = synaptics_rmi4_i2c_read(rmi4_data,
+			fhandler->full_addr.data_base + extra_data->data4_offset,
+			gesture, sizeof(gesture));
+	if (retval < 0) {
+		dev_err(&rmi4_data->i2c_client->dev,
+				"%s: Failed to read F12 data4\n", __func__);
+		return;
+	}
+
+	if (gesture[0] != F12_GESTURE_DOUBLE_TAP) {
+		if (gesture[0])
+			dev_info(&rmi4_data->i2c_client->dev,
+					"%s: ignored gesture %*ph\n", __func__,
+					(int)sizeof(gesture), gesture);
+		return;
+	}
+
+	rmi4_data->wake_gesture_count++;
+	dev_info(&rmi4_data->i2c_client->dev,
+			"%s: double tap (%u), data4 %*ph\n", __func__,
+			rmi4_data->wake_gesture_count,
+			(int)sizeof(gesture), gesture);
+
+	pm_wakeup_event(&rmi4_data->i2c_client->dev, WAKE_GESTURE_EVENT_MS);
+	input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 1);
+	input_sync(rmi4_data->input_dev);
+	input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 0);
+	input_sync(rmi4_data->input_dev);
+
+	/*
+	 * The screen may stay off (proximity check): keep the gesture mode
+	 * armed in case the firmware dropped it after the detection.
+	 */
+	addr = fhandler->full_addr.ctrl_base + extra_data->ctrl20_offset;
+	retval = synaptics_rmi4_i2c_read(rmi4_data, addr, ctrl20,
+			sizeof(ctrl20));
+	if (retval >= 0 && ctrl20[2] != F12_WAKEUP_GESTURE_MODE &&
+			rmi4_data->wake_gesture_armed) {
+		ctrl20[2] = F12_WAKEUP_GESTURE_MODE;
+		synaptics_rmi4_i2c_write(rmi4_data, addr, ctrl20,
+				sizeof(ctrl20));
+		dev_info(&rmi4_data->i2c_client->dev,
+				"%s: gesture mode re-armed\n", __func__);
+	}
+}
+
  /**
  * synaptics_rmi4_f12_abs_report()
  *
@@ -1303,6 +1579,11 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 	struct synaptics_rmi4_f12_extra_data *extra_data;
 	struct synaptics_rmi4_f12_finger_data *data;
 	struct synaptics_rmi4_f12_finger_data *finger_data;
+
+	if (rmi4_data->wake_gesture_armed) {
+		synaptics_rmi4_f12_gesture_report(rmi4_data, fhandler);
+		return 0;
+	}
 
 	fingers_to_process = fhandler->num_of_data_points;
 	data_addr = fhandler->full_addr.data_base;
@@ -1620,6 +1901,22 @@ static irqreturn_t synaptics_rmi4_irq(int irq, void *data)
 
 	if (IRQ_HANDLED == synaptics_filter_interrupt(data))
 		return IRQ_HANDLED;
+
+	/*
+	 * Woken by the gesture before the I2C controller has resumed: hold
+	 * the system awake and wait for our resume callback before reading.
+	 */
+	if (rmi4_data->wake_gesture_armed && rmi4_data->pm_suspended) {
+		pm_wakeup_event(&rmi4_data->i2c_client->dev,
+				WAKE_GESTURE_EVENT_MS);
+		if (!wait_event_timeout(rmi4_data->pm_wait,
+				!rmi4_data->pm_suspended,
+				msecs_to_jiffies(WAKE_GESTURE_I2C_WAIT_MS))) {
+			dev_warn(&rmi4_data->i2c_client->dev,
+					"%s: still suspended\n", __func__);
+			return IRQ_HANDLED;
+		}
+	}
 
 	synaptics_rmi4_sensor_report(rmi4_data);
 
@@ -2288,6 +2585,7 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 	 * byte 2 of CTRL20 and the detected gesture is reported in DATA4.
 	 */
 	extra_data->ctrl18_offset = ctrl_18_offset;
+	extra_data->ctrl18_present = query_5.ctrl18_is_present;
 	extra_data->ctrl20_offset = ctrl_20_offset;
 	extra_data->data4_offset = query_8.data0_is_present +
 			query_8.data1_is_present +
@@ -3573,6 +3871,11 @@ static int synaptics_rmi4_probe(struct i2c_client *client,
 	rmi4_data->irq_enabled = false;
 	rmi4_data->fw_updating = false;
 	rmi4_data->suspended = false;
+	rmi4_data->wake_gesture = false;
+	rmi4_data->wake_gesture_armed = false;
+	rmi4_data->pm_suspended = false;
+	mutex_init(&rmi4_data->pm_mutex);
+	init_waitqueue_head(&rmi4_data->pm_wait);
 
 	rmi4_data->i2c_read = synaptics_rmi4_i2c_read;
 	rmi4_data->i2c_write = synaptics_rmi4_i2c_write;
@@ -3720,6 +4023,11 @@ static int synaptics_rmi4_probe(struct i2c_client *client,
 			input_set_capability(rmi4_data->input_dev,
 					EV_KEY, f1a->button_map[ii]);
 		}
+	}
+
+	if (rmi4_data->f12_wakeup_gesture) {
+		input_set_capability(rmi4_data->input_dev, EV_KEY, KEY_WAKEUP);
+		device_init_wakeup(&client->dev, true);
 	}
 
 	retval = input_register_device(rmi4_data->input_dev);
@@ -3893,6 +4201,7 @@ static int synaptics_rmi4_remove(struct i2c_client *client)
 
 	rmi = &(rmi4_data->rmi4_mod_info);
 
+	device_init_wakeup(&client->dev, false);
 	debugfs_remove_recursive(rmi4_data->dir);
 	cancel_delayed_work_sync(&rmi4_data->det_work);
 	flush_workqueue(rmi4_data->det_workqueue);
@@ -4058,12 +4367,14 @@ static int fb_notifier_callback(struct notifier_block *self,
 			synaptics_secure_touch_stop(rmi4_data, 0);
 		else if (event == FB_EVENT_BLANK) {
 			blank = evdata->data;
+			mutex_lock(&rmi4_data->pm_mutex);
 			if (*blank == FB_BLANK_UNBLANK)
 				synaptics_rmi4_resume(
 					&(rmi4_data->input_dev->dev));
 			else if (*blank == FB_BLANK_POWERDOWN)
 				synaptics_rmi4_suspend(
 					&(rmi4_data->input_dev->dev));
+			mutex_unlock(&rmi4_data->pm_mutex);
 		}
 	}
 
@@ -4308,6 +4619,97 @@ static int synaptics_rmi4_check_configuration(struct synaptics_rmi4_data
  * disables the interrupt, and turns off the power to the sensor.
  */
 #ifdef CONFIG_PM
+/*
+ * Screen off with the wakeup gesture enabled: instead of the sleep and
+ * power down of the normal path, keep the controller powered (vdd and
+ * vcc_i2c), the pins, reset line and attention interrupt as they are and
+ * switch F12 to the wakeup gesture reporting mode.
+ */
+static int synaptics_rmi4_gesture_suspend(struct synaptics_rmi4_data *rmi4_data)
+{
+	int retval;
+	struct device *dev = &rmi4_data->i2c_client->dev;
+
+	synaptics_secure_touch_stop(rmi4_data, 1);
+
+	synaptics_rmi4_irq_enable(rmi4_data, false);
+	synaptics_rmi4_release_all(rmi4_data);
+
+	rmi4_data->wake_gesture_armed = true;
+	retval = synaptics_rmi4_wakeup_gesture(rmi4_data, true);
+	if (retval < 0) {
+		rmi4_data->wake_gesture_armed = false;
+		synaptics_rmi4_wakeup_gesture(rmi4_data, false);
+		synaptics_rmi4_irq_enable(rmi4_data, true);
+		return retval;
+	}
+
+	retval = synaptics_rmi4_irq_enable(rmi4_data, true);
+	if (retval < 0)
+		dev_err(dev, "%s: Failed to enable attention interrupt\n",
+				__func__);
+
+	if (device_may_wakeup(dev) && !rmi4_data->irq_wake_enabled) {
+		if (!enable_irq_wake(rmi4_data->irq))
+			rmi4_data->irq_wake_enabled = true;
+		else
+			dev_err(dev, "%s: enable_irq_wake failed\n", __func__);
+	}
+
+	rmi4_data->suspended = true;
+	dev_info(dev, "%s: wake gesture armed, irq wake %s\n", __func__,
+			rmi4_data->irq_wake_enabled ? "on" : "off");
+
+	return 0;
+}
+
+/*
+ * Screen on: leave the wakeup gesture mode. If the controller does not
+ * accept the change, reset it and reprogram the functions (the Windows
+ * driver of the Lumia 950 XL resets the controller on every wake up).
+ */
+static int synaptics_rmi4_gesture_resume(struct synaptics_rmi4_data *rmi4_data)
+{
+	int retval;
+	struct device *dev = &rmi4_data->i2c_client->dev;
+
+	synaptics_secure_touch_stop(rmi4_data, 1);
+
+	if (rmi4_data->irq_wake_enabled) {
+		disable_irq_wake(rmi4_data->irq);
+		rmi4_data->irq_wake_enabled = false;
+	}
+
+	synaptics_rmi4_irq_enable(rmi4_data, false);
+	rmi4_data->wake_gesture_armed = false;
+
+	retval = synaptics_rmi4_wakeup_gesture(rmi4_data, false);
+	if (retval < 0) {
+		dev_warn(dev, "%s: Failed to leave gesture mode (%d), resetting\n",
+				__func__, retval);
+		retval = synaptics_rmi4_reset_device(rmi4_data);
+		if (retval < 0)
+			dev_err(dev, "%s: Controller reset failed (%d)\n",
+					__func__, retval);
+		synaptics_rmi4_sensor_wake(rmi4_data);
+	}
+
+	rmi4_data->touch_stopped = false;
+	retval = synaptics_rmi4_irq_enable(rmi4_data, true);
+	if (retval < 0)
+		dev_err(dev, "%s: Failed to enable attention interrupt\n",
+				__func__);
+
+	retval = synaptics_rmi4_check_configuration(rmi4_data);
+	if (retval < 0)
+		dev_err(dev, "%s: Failed to check configuration\n", __func__);
+
+	rmi4_data->suspended = false;
+	dev_info(dev, "%s: wake gesture disarmed\n", __func__);
+
+	return 0;
+}
+
 static int synaptics_rmi4_suspend(struct device *dev)
 {
 	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
@@ -4322,6 +4724,15 @@ static int synaptics_rmi4_suspend(struct device *dev)
 	if (rmi4_data->suspended) {
 		dev_info(dev, "Already in suspend state\n");
 		return 0;
+	}
+
+	if (rmi4_data->wake_gesture && rmi4_data->f12_wakeup_gesture &&
+			!rmi4_data->fw_updating) {
+		retval = synaptics_rmi4_gesture_suspend(rmi4_data);
+		if (!retval)
+			return 0;
+		dev_err(dev, "%s: Failed to arm wake gesture (%d)\n",
+				__func__, retval);
 	}
 
 	synaptics_secure_touch_stop(rmi4_data, 1);
@@ -4407,6 +4818,9 @@ static int synaptics_rmi4_resume(struct device *dev)
 		return 0;
 	}
 
+	if (rmi4_data->wake_gesture_armed)
+		return synaptics_rmi4_gesture_resume(rmi4_data);
+
 	synaptics_secure_touch_stop(rmi4_data, 1);
 
 	retval = synaptics_rmi4_regulator_lpm(rmi4_data, false);
@@ -4482,7 +4896,36 @@ static const struct dev_pm_ops synaptics_rmi4_dev_pm_ops = {
 	.resume  = synaptics_rmi4_resume,
 };
 #else
+/*
+ * Display blank/unblank drive the sensor power through the fb notifier;
+ * the system sleep callbacks only track whether the I2C bus is usable
+ * for an attention interrupt raised by the wakeup gesture.
+ */
+static int synaptics_rmi4_pm_suspend(struct device *dev)
+{
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+
+	if (rmi4_data)
+		rmi4_data->pm_suspended = true;
+
+	return 0;
+}
+
+static int synaptics_rmi4_pm_resume(struct device *dev)
+{
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+
+	if (rmi4_data) {
+		rmi4_data->pm_suspended = false;
+		wake_up(&rmi4_data->pm_wait);
+	}
+
+	return 0;
+}
+
 static const struct dev_pm_ops synaptics_rmi4_dev_pm_ops = {
+	.suspend = synaptics_rmi4_pm_suspend,
+	.resume  = synaptics_rmi4_pm_resume,
 };
 #endif
 #else

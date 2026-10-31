@@ -259,6 +259,13 @@ struct synaptics_rmi4_data {
 	bool fw_updating;
 	bool suspended;
 	bool f12_wakeup_gesture;
+	bool wake_gesture;
+	bool wake_gesture_armed;
+	bool irq_wake_enabled;
+	bool pm_suspended;
+	unsigned int wake_gesture_count;
+	struct mutex pm_mutex;
+	wait_queue_head_t pm_wait;
 	wait_queue_head_t wait;
 	bool stay_awake;
 	bool staying_awake;
