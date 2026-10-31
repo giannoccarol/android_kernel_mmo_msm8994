@@ -114,6 +114,15 @@ struct msm_flash_ctrl_t {
 	uint8_t dt_cci_inited;
 	/* msm_camera_power_up() really ran, so power_down() may undo it */
 	uint8_t dt_powered_up;
+	/*
+	 * Optional identity check (qcom,flash-id = <reg value>): nothing is
+	 * written to the slave until that register has read back the value,
+	 * so a board whose part differs from its description is left alone.
+	 */
+	uint8_t dt_id_valid;
+	uint8_t dt_id_state;
+	uint16_t dt_id_reg;
+	uint16_t dt_id_val;
 };
 
 int msm_flash_i2c_probe(struct i2c_client *client,

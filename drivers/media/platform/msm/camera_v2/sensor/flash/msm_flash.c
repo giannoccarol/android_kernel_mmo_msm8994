@@ -726,6 +726,58 @@ static int32_t msm_flash_i2c_write_table(
 	return rc;
 }
 
+enum {
+	MSM_FLASH_ID_UNCHECKED,
+	MSM_FLASH_ID_OK,
+	MSM_FLASH_ID_MISMATCH,
+};
+
+/*
+ * Read the identity register the board described before writing anything.
+ *
+ * The register sequences come from a board description that was written for
+ * one part.  If the slave at that address turns out to be something else, or
+ * nothing, the writes are refused instead of being sent to an unknown device.
+ * A failed read is retried at the next CFG_FLASH_INIT or write, because the
+ * bus may simply not have been up yet; a wrong value is remembered.
+ *
+ * Returns 0 when the part is verified or no check was asked for.
+ */
+static int32_t msm_flash_i2c_check_id(struct msm_flash_ctrl_t *flash_ctrl)
+{
+	struct msm_camera_cci_client *cci_client =
+		flash_ctrl->flash_i2c_client.cci_client;
+	uint16_t addr = cci_client ? cci_client->sid << 1 : 0;
+	uint16_t id = 0;
+	int32_t rc;
+
+	if (!flash_ctrl->dt_id_valid ||
+		flash_ctrl->dt_id_state == MSM_FLASH_ID_OK)
+		return 0;
+	if (flash_ctrl->dt_id_state == MSM_FLASH_ID_MISMATCH)
+		return -ENODEV;
+
+	rc = flash_ctrl->flash_i2c_client.i2c_func_tbl->i2c_read(
+		&flash_ctrl->flash_i2c_client, flash_ctrl->dt_id_reg, &id,
+		MSM_CAMERA_I2C_BYTE_DATA);
+	if (rc < 0) {
+		pr_err("msm_flash: no answer at 8-bit 0x%02x on cci master %d (rc %d), flash writes refused\n",
+			addr, flash_ctrl->cci_i2c_master, rc);
+		return -ENODEV;
+	}
+	if (id != flash_ctrl->dt_id_val) {
+		pr_err("msm_flash: 8-bit 0x%02x reg 0x%02x reads 0x%02x, expected 0x%02x: not the described part, flash writes refused\n",
+			addr, flash_ctrl->dt_id_reg, id, flash_ctrl->dt_id_val);
+		flash_ctrl->dt_id_state = MSM_FLASH_ID_MISMATCH;
+		return -ENODEV;
+	}
+
+	pr_info("msm_flash: id 0x%02x at 8-bit 0x%02x on cci master %d\n",
+		id, addr, flash_ctrl->cci_i2c_master);
+	flash_ctrl->dt_id_state = MSM_FLASH_ID_OK;
+	return 0;
+}
+
 #ifdef CONFIG_COMPAT
 static void msm_flash_copy_power_settings_compat(
 	struct msm_sensor_power_setting *ps,
@@ -899,6 +951,14 @@ skip_power_settings:
 	flash_ctrl->dt_powered_up = 1;
 
 skip_power_up:
+	/*
+	 * An unverified part gets no init sequence.  Still return success:
+	 * a failed CFG_FLASH_INIT makes the camera daemon abandon the whole
+	 * session, and the camera is worth keeping without its flash.
+	 */
+	if (msm_flash_i2c_check_id(flash_ctrl) < 0)
+		return 0;
+
 	if (!flash_data->cfg.flash_init_info->settings) {
 		/* Nothing from userspace -- use the board's own init sequence */
 		if (flash_ctrl->dt_setting_valid[CFG_FLASH_INIT]) {
@@ -1086,6 +1146,10 @@ static int32_t msm_flash_i2c_write_setting_array(
 		}
 		flash_ctrl->dt_cci_inited = 1;
 	}
+
+	rc = msm_flash_i2c_check_id(flash_ctrl);
+	if (rc < 0)
+		return rc;
 
 	if (!flash_data->cfg.settings) {
 		/*
@@ -1906,12 +1970,19 @@ static int32_t msm_flash_get_dt_i2c_flash(struct device_node *of_node,
 {
 	uint32_t addr_type = MSM_CAMERA_I2C_BYTE_ADDR;
 	uint32_t data_type = MSM_CAMERA_I2C_BYTE_DATA;
+	uint32_t id[2];
 	int32_t rc;
 
 	of_property_read_u32(of_node, "qcom,flash-slave-addr",
 		&fctrl->dt_slave_addr);
 	of_property_read_u32(of_node, "qcom,flash-addr-type", &addr_type);
 	of_property_read_u32(of_node, "qcom,flash-data-type", &data_type);
+
+	if (!of_property_read_u32_array(of_node, "qcom,flash-id", id, 2)) {
+		fctrl->dt_id_reg = id[0];
+		fctrl->dt_id_val = id[1];
+		fctrl->dt_id_valid = 1;
+	}
 
 	rc = msm_flash_get_dt_setting(of_node, fctrl, "qcom,flash-init-setting",
 		CFG_FLASH_INIT, addr_type, data_type);

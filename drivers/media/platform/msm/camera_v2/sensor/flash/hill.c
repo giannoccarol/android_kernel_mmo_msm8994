@@ -83,6 +83,7 @@
 #include <linux/leds.h>
 #include <linux/mutex.h>
 #include "msm_led_flash.h"
+#include "msm_cci.h"
 
 #define FLASH_NAME "qcom,led-flash-hill"
 
@@ -229,6 +230,45 @@ static int32_t hill_led_high(struct msm_led_flash_ctrl_t *f)
 static DEFINE_MUTEX(hill_torch_lock);
 static bool hill_torch_did_init;
 
+/*
+ * Read the ID register from qcom,slave-id before lighting anything, so a
+ * board whose flash is not Hill (Windows' driver also knows four other parts)
+ * is reported rather than written to.  Checked once per boot when it passes.
+ */
+static bool hill_id_ok;
+
+static int hill_check_id(void)
+{
+	struct msm_camera_slave_info *si;
+	uint16_t id = 0;
+	int rc;
+
+	if (hill_id_ok)
+		return 0;
+	if (!fctrl.flashdata || !fctrl.flashdata->slave_info)
+		return 0;	/* no qcom,slave-id, nothing to check */
+	si = fctrl.flashdata->slave_info;
+
+	rc = fctrl.flash_i2c_client->i2c_func_tbl->i2c_read(
+		fctrl.flash_i2c_client, si->sensor_id_reg_addr, &id,
+		MSM_CAMERA_I2C_BYTE_DATA);
+	if (rc < 0) {
+		pr_err("hill: no answer at 8-bit 0x%02x on cci master %d (rc %d)\n",
+		       si->sensor_slave_addr, fctrl.cci_i2c_master, rc);
+		return -ENODEV;
+	}
+	if (id != si->sensor_id) {
+		pr_err("hill: 8-bit 0x%02x reg 0x%02x reads 0x%02x, expected 0x%02x\n",
+		       si->sensor_slave_addr, si->sensor_id_reg_addr, id,
+		       si->sensor_id);
+		return -ENODEV;
+	}
+	pr_info("hill: id 0x%02x at 8-bit 0x%02x on cci master %d\n", id,
+		si->sensor_slave_addr, fctrl.cci_i2c_master);
+	hill_id_ok = true;
+	return 0;
+}
+
 static int hill_level_from_brightness(enum led_brightness b)
 {
 	int level;
@@ -253,6 +293,24 @@ static void hill_torch_brightness_set(struct led_classdev *cdev,
 
 	mutex_lock(&hill_torch_lock);
 	if (value != LED_OFF) {
+		/*
+		 * Identify before flash_led_init(), which already writes the
+		 * init sequence and raises the enable GPIO.  CCI is refcounted,
+		 * so this short hold nests inside any other user.
+		 */
+		if (!hill_id_ok) {
+			struct msm_camera_i2c_client *c = fctrl.flash_i2c_client;
+
+			rc = c->i2c_func_tbl->i2c_util(c, MSM_CCI_INIT);
+			if (rc < 0) {
+				pr_err("hill: cci init failed %d\n", rc);
+				goto out;
+			}
+			rc = hill_check_id();
+			c->i2c_func_tbl->i2c_util(c, MSM_CCI_RELEASE);
+			if (rc < 0)
+				goto out;
+		}
 		if (fctrl.led_state != MSM_CAMERA_LED_INIT) {
 			rc = fctrl.func_tbl->flash_led_init(&fctrl);
 			if (rc < 0) {
