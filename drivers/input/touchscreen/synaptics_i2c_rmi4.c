@@ -4368,10 +4368,17 @@ static int fb_notifier_callback(struct notifier_block *self,
 		else if (event == FB_EVENT_BLANK) {
 			blank = evdata->data;
 			mutex_lock(&rmi4_data->pm_mutex);
+			/*
+			 * FB_BLANK_VSYNC_SUSPEND is the doze (always-on
+			 * display) state: the panel stays lit but the
+			 * device is not interactive, so suspend touch and
+			 * arm the double tap wake gesture as when off.
+			 */
 			if (*blank == FB_BLANK_UNBLANK)
 				synaptics_rmi4_resume(
 					&(rmi4_data->input_dev->dev));
-			else if (*blank == FB_BLANK_POWERDOWN)
+			else if (*blank == FB_BLANK_POWERDOWN ||
+					*blank == FB_BLANK_VSYNC_SUSPEND)
 				synaptics_rmi4_suspend(
 					&(rmi4_data->input_dev->dev));
 			mutex_unlock(&rmi4_data->pm_mutex);
