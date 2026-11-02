@@ -3263,6 +3263,8 @@ static void sp_tx_polling_err_int_handler(void)
 }
 static void sp_tx_lt_done_int_handler(void)
 {
+	/* consecutive link training failures at the current link rate */
+	static unchar lt_fail_count;
 	unchar c;
 	if (sp_tx_LT_state == LT_WAITTING_FINISH
 		&& sp_tx_system_state == STATE_LINK_TRAINING) {
@@ -3271,9 +3273,22 @@ static void sp_tx_lt_done_int_handler(void)
 			c = (c & 0x70) >> 4;
 			pr_info("%s %s : LT failed in interrupt, ERR code = %.2x\n", LOG_TAG, __func__, (uint) c);
 			sp_tx_LT_state = LT_ERROR;
+			/*
+			 * Fall back to a lower link rate after two failures, as a
+			 * DisplayPort source should: through the USB-C mux the
+			 * link does not always train at 5.4 Gbps.
+			 */
+			if (++lt_fail_count >= 2 && g_changed_bandwidth > LINK_1P62G) {
+				lt_fail_count = 0;
+				g_changed_bandwidth = (g_changed_bandwidth > LINK_2P7G) ?
+						LINK_2P7G : LINK_1P62G;
+				pr_info("%s %s : lowering link rate to %.2x\n", LOG_TAG,
+					__func__, (uint)g_changed_bandwidth);
+			}
 		} else {
 			pr_info("%s %s : lt_done: LT Finish \n", LOG_TAG, __func__);
 			sp_tx_LT_state = LT_FINISH;
+			lt_fail_count = 0;
 		}
 	}
 
