@@ -94,8 +94,8 @@ Double tap to wake (touch controller)
   lineage-18.0, synaptics_driver_s3320.c): gesture enable through CTRL20 on
   another MSM8994 phone, as a reference for the suspend/resume sequence.
 
-USB-C video path (test branches test/cityman-usbc-probe, test/cityman-anx7816)
-------------------------------------------------------------------------------
+USB-C video path (test branches test/cityman-usbc-probe, -anx7816, -uc120)
+---------------------------------------------------------------------------
 - LG Electronics and Analogix Semiconductor, via LineageOS
   (github.com/LineageOS/android_kernel_lge_msm8992, lineage-15.1,
   d25caae7761f, drivers/video/slimport/anx7816 and include/linux/slimport.h,
@@ -107,6 +107,13 @@ USB-C video path (test branches test/cityman-usbc-probe, test/cityman-anx7816)
 - WOA-Project (github.com/WOA-Project/Lumia950XLPkg, AcpiTables/8994): the
   ACPI tables of the 950 XL, where the bus addresses, GPIOs and PEP power
   sequences of the UC120, the mux and the bridge come from.
+- Bingxing Wang (imbushuo) and Gustave Monce (gus33), WOA-Project
+  (github.com/WOA-Project/Ice5Lp2k, 7f1d597): the reimplementation of the
+  Windows UC120 PHY driver, whose structure and IOCTL names helped read the
+  original ice5lp_2k.sys. The UC120 driver (drivers/misc/uc120.c) follows
+  the register use, calibration and the PD / DisplayPort alternate mode
+  sequence of the Microsoft ice5lp_2k.sys and tyc.dll binaries of the
+  Lumia driver package, collected by the LumiaWoA community.
 
 Not in this branch
 ------------------
