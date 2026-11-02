@@ -59,6 +59,7 @@
 };
 
 #include "cityman-thermal.dtsi"
+#include "cityman-usbc-probe.dtsi"
 
 /* The stock MPSS asserts in coex_qmb.c with the WLAN WCI-2 coexistence on. */
 &cnss {

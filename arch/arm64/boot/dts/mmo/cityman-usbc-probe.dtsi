@@ -1,0 +1,71 @@
+/*
+ * Test only (test/cityman-usbc-probe): expose the USB-C video path of the
+ * Lumia 950 XL for read-only probing. From the Windows SSDT:
+ *  - UC120 (Lattice iCE5LP2K, MSHW1006): SPI10 CS0, 5 MHz, mode 0
+ *  - mux (MSHW1009): PMI8994 GPIO 5, 8, 9, 10
+ *  - Analogix ANX78xx (MSHW1007): I2C11 0x38/0x39/0x3d/0x3f/0x40, power PMI8994 GPIO 7
+ * PMIC GPIO nodes carry no properties, so qpnp-pin keeps the configuration
+ * left by the bootloader and only exposes the pins.
+ */
+
+&tlmm_pinmux {
+	spi_10_data_active {
+		/* MOSI, MISO */
+		qcom,pins = <&gp 53>, <&gp 54>;
+		qcom,num-grp-pins = <2>;
+		qcom,pin-func = <3>;
+		label = "spi_10-data-active";
+		spi_10_data_active: spi_10_data_active {
+			drive-strength = <6>;
+			bias-disable;
+		};
+	};
+
+	spi_10_ctl_active {
+		/* CS0, CLK */
+		qcom,pins = <&gp 55>, <&gp 56>;
+		qcom,num-grp-pins = <2>;
+		qcom,pin-func = <2>;
+		label = "spi_10-ctl-active";
+		spi_10_ctl_active: spi_10_ctl_active {
+			drive-strength = <6>;
+			bias-disable;
+		};
+	};
+};
+
+&soc {
+	spi_10: spi@f9966000 { /* BLSP2 QUP4 */
+		compatible = "qcom,spi-qup-v2";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		reg-names = "spi_physical";
+		reg = <0xf9966000 0x1000>;
+		interrupt-names = "spi_irq";
+		interrupts = <0 104 0>;
+		spi-max-frequency = <19200000>;
+		qcom,infinite-mode = <0>;
+		qcom,ver-reg-exists;
+		qcom,master-id = <84>;
+		qcom,use-pinctrl;
+		pinctrl-names = "spi_default", "spi_sleep";
+		pinctrl-0 = <&spi_10_data_active &spi_10_ctl_active>;
+		pinctrl-1 = <&spi_10_data_active &spi_10_ctl_active>;
+		clock-names = "iface_clk", "core_clk";
+		clocks = <&clock_gcc clk_gcc_blsp2_ahb_clk>,
+			 <&clock_gcc clk_gcc_blsp2_qup4_spi_apps_clk>;
+
+		uc120@0 {
+			compatible = "spidev";
+			reg = <0>;
+			spi-max-frequency = <5000000>;
+		};
+	};
+};
+
+&pmi8994_gpios {
+	gpio@c600 { status = "okay"; };	/* GPIO 7: Analogix power/reset */
+	gpio@c700 { status = "okay"; };	/* GPIO 8: mux */
+	gpio@c800 { status = "okay"; };	/* GPIO 9: mux */
+	gpio@c900 { status = "okay"; };	/* GPIO 10: mux */
+};
