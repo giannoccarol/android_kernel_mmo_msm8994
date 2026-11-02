@@ -96,3 +96,22 @@
 	gpio@c800 { status = "okay"; };	/* GPIO 9: mux */
 	gpio@c900 { status = "okay"; };	/* GPIO 10: mux */
 };
+
+/*
+ * Analogix ANX7816 SlimPort (HDMI in, DisplayPort out) on I2C11 = i2c_5.
+ * Power sequence as the Windows PEP for the mux (CPSW): DIV_CLK3, P_DWN
+ * (PMI8994 GPIO 6) low, RESET_N (PMI8994 GPIO 7) high. INTP on TLMM 41.
+ * No cable detect pin: the USB-C controller would report the sink.
+ */
+&i2c_5 {
+	analogix_anx7816@39 {
+		compatible = "analogix,anx7816";
+		reg = <0x39>;
+		analogix,p-dwn-gpio = <&pmi8994_gpios 6 0x0>;
+		analogix,reset-gpio = <&pmi8994_gpios 7 0x0>;
+		analogix,irq-gpio = <&msm_gpio 41 0x0>;
+		lge,external-ldo-control = <0>;
+		clock-names = "xtal";
+		clocks = <&clock_rpm clk_div_clk3>;
+	};
+};

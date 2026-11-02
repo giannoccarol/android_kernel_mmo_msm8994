@@ -2453,6 +2453,7 @@ config FB_SIMPLE
 	  future.
 
 source "drivers/video/msm/Kconfig"
+source "drivers/video/slimport/Kconfig"
 source "drivers/video/omap/Kconfig"
 source "drivers/video/omap2/Kconfig"
 source "drivers/video/exynos/Kconfig"
