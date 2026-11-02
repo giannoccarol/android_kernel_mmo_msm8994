@@ -2335,6 +2335,12 @@ void slimport_hdcp_process(void)
 		HDCP_fail_count = 0;
 		HDCP_state = HDCP_WAITTING_VID_STB;
 
+		/* No HDCP when the board or the user turned it off */
+		if (hdcp_disable) {
+			HDCP_state = HDCP_NOT_SUPPORT;
+			SP_BREAK(HDCP_CAPABLE_CHECK, HDCP_state);
+		}
+
 		if (external_block_en == 0) {
 			#ifdef NEW_HDCP_CONTROL_LOGIC
 			unsigned char temp_var;

@@ -111,6 +111,7 @@
 		analogix,reset-gpio = <&pmi8994_gpios 7 0x0>;
 		analogix,irq-gpio = <&msm_gpio 41 0x0>;
 		lge,external-ldo-control = <0>;
+		analogix,hdcp-disable;
 		clock-names = "xtal";
 		clocks = <&clock_rpm clk_div_clk3>;
 	};

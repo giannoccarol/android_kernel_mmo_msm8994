@@ -1213,6 +1213,13 @@ static void anx7816_cable_event(struct anx7816_data *anx7816, bool connected)
 		anx7816->slimport_connected = false;
 		pr_err("%s %s : cable removed\n", LOG_TAG, __func__);
 		cancel_delayed_work_sync(&anx7816->work);
+		/* nothing else will power the bridge down without a cable pin */
+		if (!gpio_is_valid(anx7816->pdata->gpio_cbl_det)) {
+			mutex_lock(&anx7816->lock);
+			sp_tx_clean_state_machine();
+			sp_tx_hardware_powerdown();
+			mutex_unlock(&anx7816->lock);
+		}
 		wake_unlock(&anx7816->slimport_lock);
 		wake_lock_timeout(&anx7816->slimport_lock, 2*HZ);
 	}
@@ -1420,6 +1427,10 @@ static int anx7816_parse_dt(
 	}
 	pdata->hdmi_pdev = sp_pdev;
 #endif
+	/* cityman: the SoC HDMI does not run HDCP, so the sink would refuse */
+	if (of_property_read_bool(np, "analogix,hdcp-disable"))
+		hdcp_disable = 1;
+
 	pdata->xtal = devm_clk_get(dev, "xtal");
 	if (IS_ERR(pdata->xtal))
 		pdata->xtal = NULL;
