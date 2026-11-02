@@ -1,11 +1,12 @@
 /*
- * Test only (test/cityman-usbc-probe): expose the USB-C video path of the
- * Lumia 950 XL for read-only probing. From the Windows SSDT:
- *  - UC120 (Lattice iCE5LP2K, MSHW1006): SPI10 CS0, 5 MHz, mode 0
- *  - mux (MSHW1009): PMI8994 GPIO 5, 8, 9, 10
- *  - Analogix ANX78xx (MSHW1007): I2C11 0x38/0x39/0x3d/0x3f/0x40, power PMI8994 GPIO 7
- * PMIC GPIO nodes carry no properties, so qpnp-pin keeps the configuration
- * left by the bootloader and only exposes the pins.
+ * USB-C path of the Lumia 950 XL, from the Windows SSDT:
+ *  - UC120 (Lattice iCE5LP2K, MSHW1006): Type-C/PD PHY on SPI10 CS0,
+ *    driven by drivers/misc/uc120.c (charging current, USB host, PD and
+ *    DisplayPort alternate mode);
+ *  - mux (MSHW1009): PMI8994 GPIO 5, 8, 9, 10;
+ *  - Analogix ANX7816 (MSHW1007): HDMI to DisplayPort bridge on I2C11,
+ *    power PMI8994 GPIO 6/7.
+ * The file name is kept from the first probing branch.
  */
 
 &tlmm_pinmux {
