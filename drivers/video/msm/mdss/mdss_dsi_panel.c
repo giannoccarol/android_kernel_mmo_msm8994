@@ -721,11 +721,22 @@ static int mdss_dsi_panel_low_power_config(struct mdss_panel_data *pdata,
 	pr_debug("%s: ctrl=%pK ndx=%d enable=%d\n", __func__, ctrl, ctrl->ndx,
 		enable);
 
-	/* Any panel specific low power commands/config */
-	if (enable)
+	/*
+	 * Panel specific low power commands: on command mode panels the
+	 * display stays on in doze (LP1/LP2), so put the panel in its idle
+	 * mode (reduced colours, internal low refresh) while it lasts.
+	 */
+	if (enable) {
+		if (ctrl->idle_on_cmds.cmd_cnt)
+			mdss_dsi_panel_cmds_send(ctrl, &ctrl->idle_on_cmds,
+				CMD_REQ_COMMIT);
 		pinfo->blank_state = MDSS_PANEL_BLANK_LOW_POWER;
-	else
+	} else {
+		if (ctrl->idle_off_cmds.cmd_cnt)
+			mdss_dsi_panel_cmds_send(ctrl, &ctrl->idle_off_cmds,
+				CMD_REQ_COMMIT);
 		pinfo->blank_state = MDSS_PANEL_BLANK_UNBLANK;
+	}
 
 	pr_debug("%s:-\n", __func__);
 	return 0;
@@ -1959,6 +1970,13 @@ static int mdss_panel_parse_dt(struct device_node *np,
 
 	mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->off_cmds,
 		"qcom,mdss-dsi-off-command", "qcom,mdss-dsi-off-command-state");
+
+	mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->idle_on_cmds,
+		"qcom,mdss-dsi-idle-on-command",
+		"qcom,mdss-dsi-idle-on-command-state");
+	mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->idle_off_cmds,
+		"qcom,mdss-dsi-idle-off-command",
+		"qcom,mdss-dsi-idle-off-command-state");
 
 	pinfo->mipi.force_clk_lane_hs = of_property_read_bool(np,
 		"qcom,mdss-dsi-force-clock-lane-hs");
