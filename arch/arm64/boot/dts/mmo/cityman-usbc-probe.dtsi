@@ -64,7 +64,34 @@
 };
 
 &pmi8994_gpios {
-	gpio@c600 { status = "okay"; };	/* GPIO 7: Analogix power/reset */
+	/*
+	 * GPIO 6 and 7 as the Windows PEP drives them for the mux (CPSW):
+	 * CMOS output, VIN2 (1.8 V), high strength. Boot in the "USB" state
+	 * (P-state 1: GPIO 6 high, GPIO 7 low); the video states turn GPIO 6
+	 * low and GPIO 7 high together with PM8994 DIV_CLK3.
+	 */
+	gpio@c500 {	/* GPIO 6 */
+		qcom,mode = <1>;
+		qcom,output-type = <0>;
+		qcom,pull = <5>;
+		qcom,vin-sel = <2>;
+		qcom,out-strength = <3>;
+		qcom,src-sel = <0>;
+		qcom,invert = <1>;	/* constant high */
+		qcom,master-en = <1>;
+		status = "okay";
+	};
+	gpio@c600 {	/* GPIO 7: Analogix power/reset */
+		qcom,mode = <1>;
+		qcom,output-type = <0>;
+		qcom,pull = <5>;
+		qcom,vin-sel = <2>;
+		qcom,out-strength = <3>;
+		qcom,src-sel = <0>;
+		qcom,invert = <0>;	/* constant low */
+		qcom,master-en = <1>;
+		status = "okay";
+	};
 	gpio@c700 { status = "okay"; };	/* GPIO 8: mux */
 	gpio@c800 { status = "okay"; };	/* GPIO 9: mux */
 	gpio@c900 { status = "okay"; };	/* GPIO 10: mux */
