@@ -1227,9 +1227,20 @@ static void anx7816_cable_event(struct anx7816_data *anx7816, bool connected)
 
 /*
  * cityman: no cable detect pin, the USB-C controller (UC120) decides when a
- * DisplayPort sink is attached. Until a driver does that, set it by hand:
- * echo 1 > force_cable starts the SlimPort state machine, 0 stops it.
+ * DisplayPort sink is attached and calls slimport_typec_hpd() once the
+ * DisplayPort alternate mode is configured and the sink raised HPD.
+ * force_cable does the same by hand: 1 starts the SlimPort state machine,
+ * 0 stops it.
  */
+void slimport_typec_hpd(bool on)
+{
+	if (!g_anx7816)
+		return;
+	force_cable = on;
+	anx7816_cable_event(g_anx7816, on);
+}
+EXPORT_SYMBOL(slimport_typec_hpd);
+
 static ssize_t anx7816_force_cable_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
