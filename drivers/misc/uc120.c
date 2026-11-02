@@ -123,6 +123,8 @@ struct uc120 {
 	struct task_struct *thread;
 	wait_queue_head_t wq;
 	bool irq_pending;
+	bool psy_changed;
+	struct power_supply psy;		/* only to hear "usb" changes */
 	struct mutex lock;		/* SPI and status */
 	u8 *txbuf, *rxbuf;
 
@@ -580,6 +582,33 @@ static int uc120_source_contract(struct uc120 *uc)
 	return 0;
 }
 
+/*
+ * The FPGA cannot see VBUS. As the Windows driver does on the PMIC USBIN
+ * interrupts, tell it when an external source powers VBUS (needed for the
+ * sink attach), and treat VBUS going away as the sink detach.
+ */
+static void uc120_vbus_in(struct uc120 *uc)
+{
+	struct power_supply *psy = uc120_usb_psy(uc);
+	union power_supply_propval v = { 0 };
+	bool present;
+
+	if (!psy || uc->vbus_on ||
+	    psy->get_property(psy, POWER_SUPPLY_PROP_PRESENT, &v))
+		return;
+	present = v.intval;
+	if (present == !!(uc->role & ROLE_VBUS_IN))
+		return;
+	dev_info(uc->dev, "external VBUS %s\n", present ? "on" : "off");
+	if (present) {
+		uc120_set_role(uc, ROLE_VBUS_IN, 0);
+	} else {
+		uc120_set_role(uc, 0, ROLE_VBUS_IN);
+		if (uc->state == ST_SINK)
+			uc->tc_event = TC_DETACH;
+	}
+}
+
 static void uc120_detach(struct uc120 *uc)
 {
 	uc120_hpd(uc, false);
@@ -786,9 +815,13 @@ static int uc120_thread(void *data)
 				   MAX_SCHEDULE_TIMEOUT;
 
 		wait_event_freezable_timeout(uc->wq, uc->irq_pending ||
+					     uc->psy_changed ||
 					     kthread_should_stop(), t);
 		uc->irq_pending = false;
 		mutex_lock(&uc->lock);
+		/* cheap: one property read, also covers missed notifications */
+		uc->psy_changed = false;
+		uc120_vbus_in(uc);
 		uc120_poll(uc);
 		while (uc->tc_event || uc->qh != uc->qt) {
 			uc120_handle(uc);
@@ -800,6 +833,32 @@ static int uc120_thread(void *data)
 	}
 	return 0;
 }
+
+static void uc120_external_power_changed(struct power_supply *psy)
+{
+	struct uc120 *uc = container_of(psy, struct uc120, psy);
+
+	uc->psy_changed = true;
+	wake_up(&uc->wq);
+}
+
+static enum power_supply_property uc120_psy_props[] = {
+	POWER_SUPPLY_PROP_ONLINE,
+};
+
+static int uc120_psy_get(struct power_supply *psy,
+			 enum power_supply_property psp,
+			 union power_supply_propval *val)
+{
+	struct uc120 *uc = container_of(psy, struct uc120, psy);
+
+	if (psp != POWER_SUPPLY_PROP_ONLINE)
+		return -EINVAL;
+	val->intval = uc->state != ST_DETACHED;
+	return 0;
+}
+
+static char *uc120_supplied_from[] = { "usb" };
 
 static irqreturn_t uc120_irq(int irq, void *data)
 {
@@ -822,6 +881,45 @@ static ssize_t uc120_status_show(struct device *dev,
 		uc->dp_mode_vdo);
 }
 static DEVICE_ATTR(status, S_IRUGO, uc120_status_show, NULL);
+
+/* debug: read registers 0-31, or write "reg value" (hex) */
+static ssize_t uc120_regs_show(struct device *dev,
+			       struct device_attribute *attr, char *buf)
+{
+	struct uc120 *uc = dev_get_drvdata(dev);
+	int r, n = 0;
+
+	mutex_lock(&uc->lock);
+	for (r = 0; r < 32; r++) {
+		if (r == UC120_INT || r == UC120_RX_FIFO)
+			continue;	/* reading them has side effects */
+		n += scnprintf(buf + n, PAGE_SIZE - n, "%02d=%02x%s", r,
+			       uc120_read(uc, r) & 0xff, r % 8 == 7 ? "\n" : " ");
+	}
+	mutex_unlock(&uc->lock);
+	n += scnprintf(buf + n, PAGE_SIZE - n, "\n");
+	return n;
+}
+
+static ssize_t uc120_regs_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct uc120 *uc = dev_get_drvdata(dev);
+	unsigned int reg, val;
+
+	if (sscanf(buf, "%x %x", &reg, &val) != 2 || reg > 31 || val > 0xff)
+		return -EINVAL;
+	mutex_lock(&uc->lock);
+	uc120_write(uc, reg, val);
+	if (reg == UC120_CTRL)
+		uc->ctrl = val;
+	if (reg == UC120_ROLE)
+		uc->role = val;
+	mutex_unlock(&uc->lock);
+	return count;
+}
+static DEVICE_ATTR(regs, S_IRUGO | S_IWUSR, uc120_regs_show, uc120_regs_store);
 
 static int uc120_gpio(struct uc120 *uc, const char *name, int val)
 {
@@ -915,6 +1013,20 @@ static int uc120_probe(struct spi_device *spi)
 	}
 
 	device_create_file(uc->dev, &dev_attr_status);
+	device_create_file(uc->dev, &dev_attr_regs);
+
+	uc->psy.name = "uc120";
+	uc->psy.type = POWER_SUPPLY_TYPE_UNKNOWN;
+	uc->psy.properties = uc120_psy_props;
+	uc->psy.num_properties = ARRAY_SIZE(uc120_psy_props);
+	uc->psy.get_property = uc120_psy_get;
+	uc->psy.external_power_changed = uc120_external_power_changed;
+	uc->psy.supplied_from = uc120_supplied_from;
+	uc->psy.num_supplies = ARRAY_SIZE(uc120_supplied_from);
+	if (power_supply_register(uc->dev, &uc->psy)) {
+		dev_warn(uc->dev, "no power supply, VBUS by polling only\n");
+		uc->psy.name = NULL;
+	}
 
 	uc->thread = kthread_run(uc120_thread, uc, "uc120");
 	if (IS_ERR(uc->thread)) {
@@ -925,6 +1037,9 @@ static int uc120_probe(struct spi_device *spi)
 	return 0;
 
 err_file:
+	if (uc->psy.name)
+		power_supply_unregister(&uc->psy);
+	device_remove_file(uc->dev, &dev_attr_regs);
 	device_remove_file(uc->dev, &dev_attr_status);
 err_clk:
 	if (uc->xtal)
@@ -943,6 +1058,9 @@ static int uc120_remove(struct spi_device *spi)
 		uc120_detach(uc);
 	uc120_set_ctrl(uc, 0, CTRL_IRQ_EN);
 	mutex_unlock(&uc->lock);
+	if (uc->psy.name)
+		power_supply_unregister(&uc->psy);
+	device_remove_file(uc->dev, &dev_attr_regs);
 	device_remove_file(uc->dev, &dev_attr_status);
 	if (uc->xtal)
 		clk_disable_unprepare(uc->xtal);
