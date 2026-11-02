@@ -45,6 +45,8 @@
 	qcom,dc-psy-type = "Wireless";
 	qcom,dc-psy-ma = <900>;
 	qcom,usb-cc-controller;
+	/* USB-C port: USBID floats, the OTG role comes from the Type-C side */
+	qcom,otg-without-usbid;
 	qcom,disable-apsd;
 	qcom,disable-hvdcp;
 	qcom,customized-jeita;

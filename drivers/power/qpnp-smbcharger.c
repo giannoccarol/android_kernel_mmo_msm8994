@@ -164,6 +164,7 @@ struct smbchg_chip {
 	bool				batt_present;
 	int				otg_retries;
 	ktime_t				otg_enable_time;
+	bool				otg_without_usbid;
 	bool				aicl_deglitch_short;
 	bool				sw_esr_pulse_en;
 	bool				safety_timer_en;
@@ -4881,9 +4882,12 @@ static irqreturn_t otg_oc_handler(int irq, void *_chip)
 		/*
 		 * There is a possibility that an USBID interrupt might have
 		 * occurred notifying USB power supply to disable OTG. We
-		 * should not enable OTG in such cases.
+		 * should not enable OTG in such cases. Boards whose USB-C
+		 * port leaves USBID floating (qcom,otg-without-usbid) never
+		 * see it grounded: OTG was requested by its consumer there,
+		 * so retry anyway.
 		 */
-		if (!is_otg_present(chip)) {
+		if (!chip->otg_without_usbid && !is_otg_present(chip)) {
 			pr_smb(PR_STATUS,
 				"OTG is not present, not enabling OTG_EN_BIT\n");
 			return IRQ_HANDLED;
@@ -5733,6 +5737,8 @@ static int smb_parse_dt(struct smbchg_chip *chip)
 					"qcom,force-aicl-rerun");
 	chip->usb_cc_controller = of_property_read_bool(node,
 					"qcom,usb-cc-controller");
+	chip->otg_without_usbid = of_property_read_bool(node,
+					"qcom,otg-without-usbid");
 	chip->disable_apsd = of_property_read_bool(node,
 					"qcom,disable-apsd");
 	chip->disable_hvdcp = of_property_read_bool(node,
