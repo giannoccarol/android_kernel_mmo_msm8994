@@ -2477,6 +2477,11 @@ dwc3_msm_property_is_writeable(struct power_supply *psy,
 	switch (psp) {
 	case POWER_SUPPLY_PROP_PRESENT:
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
+	/*
+	 * Writable so that userspace can ask for the host role on boards
+	 * where no driver reports the USB-C role (USBID left floating).
+	 */
+	case POWER_SUPPLY_PROP_USB_OTG:
 		return 1;
 	default:
 		break;
