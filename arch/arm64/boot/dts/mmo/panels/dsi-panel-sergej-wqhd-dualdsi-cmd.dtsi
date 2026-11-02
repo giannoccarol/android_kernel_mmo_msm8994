@@ -95,10 +95,27 @@
 		qcom,mdss-dsi-off-command = [
 			/* set_display_off */
 			05 01 00 00 21 00 02 28 00
-			/* set_idle_on */
-       		05 01 00 00 78 00 02 10 00
+			/* enter_sleep_mode, wait 120ms */
+			05 01 00 00 78 00 02 10 00
 			];
 		qcom,mdss-dsi-off-command-state = "dsi_hs_mode";
+		/*
+		 * Doze (always-on display): DCS idle mode, as the Windows
+		 * oempanel driver does for the Glance screen. On exit Windows
+		 * sends normal mode on, idle mode off and waits 5 ms.
+		 */
+		qcom,mdss-dsi-idle-on-command = [
+			/* enter_idle_mode */
+			05 01 00 00 00 00 02 39 00
+			];
+		qcom,mdss-dsi-idle-on-command-state = "dsi_hs_mode";
+		qcom,mdss-dsi-idle-off-command = [
+			/* enter_normal_mode */
+			05 01 00 00 00 00 02 13 00
+			/* exit_idle_mode, wait 5ms */
+			05 01 00 00 05 00 02 38 00
+			];
+		qcom,mdss-dsi-idle-off-command-state = "dsi_hs_mode";
 		qcom,mdss-pan-physical-width-dimension = <65>;
 		qcom,mdss-pan-physical-height-dimension = <115>;
 	};
@@ -183,10 +200,27 @@
 		qcom,mdss-dsi-off-command = [
 			/* set_display_off */
 			05 01 00 00 21 00 02 28 00
-			/* set_idle_on */
-       		05 01 00 00 78 00 02 10 00
+			/* enter_sleep_mode, wait 120ms */
+			05 01 00 00 78 00 02 10 00
 			];
 		qcom,mdss-dsi-off-command-state = "dsi_hs_mode";
+		/*
+		 * Doze (always-on display): DCS idle mode, as the Windows
+		 * oempanel driver does for the Glance screen. On exit Windows
+		 * sends normal mode on, idle mode off and waits 5 ms.
+		 */
+		qcom,mdss-dsi-idle-on-command = [
+			/* enter_idle_mode */
+			05 01 00 00 00 00 02 39 00
+			];
+		qcom,mdss-dsi-idle-on-command-state = "dsi_hs_mode";
+		qcom,mdss-dsi-idle-off-command = [
+			/* enter_normal_mode */
+			05 01 00 00 00 00 02 13 00
+			/* exit_idle_mode, wait 5ms */
+			05 01 00 00 05 00 02 38 00
+			];
+		qcom,mdss-dsi-idle-off-command-state = "dsi_hs_mode";
 		qcom,mdss-pan-physical-width-dimension = <65>;
 		qcom,mdss-pan-physical-height-dimension = <115>;
 	};
