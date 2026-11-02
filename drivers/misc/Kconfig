@@ -637,4 +637,14 @@ source "drivers/misc/altera-stapl/Kconfig"
 source "drivers/misc/mei/Kconfig"
 source "drivers/misc/vmw_vmci/Kconfig"
 source "drivers/misc/qcom/Kconfig"
+config UC120_TYPEC
+	tristate "Microsoft UC120 USB Type-C PD PHY (Lumia 950 XL)"
+	depends on SPI && POWER_SUPPLY
+	help
+	  Driver for the Lattice iCE5LP2K based USB Type-C and USB PD PHY of
+	  the Lumia 950 XL. Handles attach and orientation, the charging
+	  current advertised by the source, VBUS/VCONN, a USB PD source
+	  contract and the DisplayPort alternate mode for USB-C video
+	  adapters.
+
 endmenu

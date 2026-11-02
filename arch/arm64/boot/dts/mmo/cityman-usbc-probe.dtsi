@@ -55,10 +55,26 @@
 		clocks = <&clock_gcc clk_gcc_blsp2_ahb_clk>,
 			 <&clock_gcc clk_gcc_blsp2_qup4_spi_apps_clk>;
 
+		/*
+		 * UC120 Type-C/PD PHY. Calibration: MMO/ice5lp_2k_cal.bin of
+		 * the DPP partition (v2 file, bytes 1..10); the driver falls
+		 * back to the nominal thresholds without it. IRQ on TLMM 95.
+		 * Mux as TypeCMux.sys: PMI8994 GPIO 8 POL, 9 AMSEL, 10 EN.
+		 * VCONN from BOOST1_B as the Windows PEP.
+		 */
 		uc120@0 {
-			compatible = "spidev";
+			compatible = "microsoft,uc120";
 			reg = <0>;
-			spi-max-frequency = <5000000>;
+			spi-max-frequency = <1000000>;
+			clock-names = "xtal";
+			clocks = <&clock_rpm clk_div_clk3>;
+			vconn-supply = <&pmi8994_boost_5v>;
+			microsoft,irq-gpio = <&msm_gpio 95 0>;
+			microsoft,mux-pol-gpio = <&pmi8994_gpios 8 0>;
+			microsoft,mux-amsel-gpio = <&pmi8994_gpios 9 0>;
+			microsoft,mux-en-gpio = <&pmi8994_gpios 10 0>;
+			microsoft,calibration = /bits/ 8 <0x0c 0x7c 0x31 0x5e 0x9d
+							  0x0a 0x7a 0x2f 0x5c 0x9b>;
 		};
 	};
 };
