@@ -61,7 +61,8 @@
 		qcom,mdss-dsi-t-clk-pre = <0x5e>;
 
 		qcom,mdss-dsi-bl-min-level = <1>;
-		qcom,mdss-dsi-bl-max-level = <128>;
+		/* full DCS 0x51 range: 128 capped Android's maximum at half scale */
+		qcom,mdss-dsi-bl-max-level = <255>;
 		qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_dcs";
 
 		qcom,mdss-dsi-dma-trigger = "trigger_sw";
@@ -166,7 +167,8 @@
 		qcom,mdss-dsi-t-clk-pre = <0x5e>;
 
 		qcom,mdss-dsi-bl-min-level = <1>;
-		qcom,mdss-dsi-bl-max-level = <128>;
+		/* full DCS 0x51 range: 128 capped Android's maximum at half scale */
+		qcom,mdss-dsi-bl-max-level = <255>;
 		qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_dcs";
 
 		qcom,mdss-dsi-dma-trigger = "trigger_sw";
