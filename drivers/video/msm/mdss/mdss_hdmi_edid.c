@@ -15,6 +15,7 @@
 #include <linux/stat.h>
 #include <linux/slab.h>
 #include <linux/device.h>
+#include <linux/slimport.h>
 #include "mdss_hdmi_edid.h"
 
 #define DBC_START_OFFSET 4
@@ -498,6 +499,26 @@ static int hdmi_edid_read_block(struct hdmi_edid_ctrl *edid_ctrl, int block,
 		DEV_ERR("%s: invalid input\n", __func__);
 		return -EINVAL;
 	}
+
+#ifdef CONFIG_SLIMPORT_ANX7816
+	/*
+	 * Behind a SlimPort bridge the sink EDID comes over the DisplayPort
+	 * AUX channel and the bridge already has it. On boards where the
+	 * HDMI DDC lines are not wired to the bridge (Lumia 950 XL) the DDC
+	 * read only NACKs, so take the bridge copy when it is valid.
+	 */
+	if (block < 2 && slimport_is_connected() &&
+	    !slimport_read_edid_block(block, edid_buf)) {
+		for (ndx = 0, check_sum = 0; ndx < 0x80; ++ndx)
+			check_sum += edid_buf[ndx];
+		if (!(check_sum & 0xFF) &&
+		    (block ? edid_buf[0] != 0 : edid_buf[1] == 0xFF)) {
+			DEV_INFO("%s: EDID block %d from the SlimPort bridge\n",
+				__func__, block);
+			return 0;
+		}
+	}
+#endif
 
 read_retry:
 	block_size = 0x80;
