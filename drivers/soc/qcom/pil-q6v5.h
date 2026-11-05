@@ -43,6 +43,12 @@ struct q6v5_data {
 	struct regulator *vreg_mx;
 	struct regulator *vreg_pll;
 	bool is_booted;
+	/*
+	 * The MBA rejected the modem image in this boot. After that the RMB
+	 * registers fault on access (synchronous external abort), so the
+	 * modem is not started again until the next reboot.
+	 */
+	bool mba_rejected;
 	struct pil_desc desc;
 	bool self_auth;
 	phys_addr_t mba_phys;

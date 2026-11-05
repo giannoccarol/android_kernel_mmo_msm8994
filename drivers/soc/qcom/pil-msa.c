@@ -471,6 +471,11 @@ int pil_mss_reset_load_mba(struct pil_desc *pil)
 	int ret, count;
 	const u8 *data;
 
+	if (drv->mba_rejected) {
+		dev_err(pil->dev, "MBA rejected the modem image earlier in this boot, not starting the modem again\n");
+		return -EIO;
+	}
+
 	fw_name_p = drv->non_elf_image ? fw_name_legacy : fw_name;
 	/* Load and authenticate mba image */
 	ret = request_firmware(&fw, fw_name_p, pil->dev);
@@ -572,6 +577,8 @@ static int pil_msa_auth_modem_mdt(struct pil_desc *pil, const u8 *metadata,
 	} else if (status < 0) {
 		dev_err(pil->dev, "MBA returned error %d for headers\n",
 				status);
+		if (drv->q6)
+			drv->q6->mba_rejected = true;
 		ret = -EINVAL;
 	}
 
@@ -625,6 +632,8 @@ static int pil_msa_mba_verify_blob(struct pil_desc *pil, phys_addr_t phy_addr,
 	if (status < 0) {
 		dev_err(pil->dev, "MBA returned error %d\n", status);
 		modem_log_rmb_regs(drv->rmb_base);
+		if (drv->q6)
+			drv->q6->mba_rejected = true;
 		return -EINVAL;
 	}
 
@@ -646,6 +655,7 @@ static int pil_msa_mba_auth(struct pil_desc *pil)
 		dev_err(pil->dev, "MBA authentication of image timed out\n");
 	} else if (status < 0) {
 		dev_err(pil->dev, "MBA returned error %d for image\n", status);
+		q6_drv->mba_rejected = true;
 		ret = -EINVAL;
 	}
 
