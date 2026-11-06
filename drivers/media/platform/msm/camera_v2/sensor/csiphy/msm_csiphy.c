@@ -44,7 +44,6 @@ static struct camera_vreg_t csiphy_vreg_info[] = {
 #undef CDBG
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
 
-static struct msm_cam_clk_info csiphy_clk_info[CSIPHY_NUM_CLK_MAX];
 static struct v4l2_file_operations msm_csiphy_v4l2_subdev_fops;
 
 /*
@@ -407,7 +406,7 @@ static int msm_csiphy_init(struct csiphy_device *csiphy_dev)
 
 	if (csiphy_dev->hw_dts_version < CSIPHY_VERSION_V30) {
 		rc = msm_cam_clk_enable(&csiphy_dev->pdev->dev,
-			csiphy_clk_info, csiphy_dev->csiphy_clk,
+			csiphy_dev->csiphy_clk_info, csiphy_dev->csiphy_clk,
 			csiphy_dev->num_clk, 1);
 	} else if (csiphy_dev->hw_dts_version >= CSIPHY_VERSION_V30) {
 		if (!csiphy_dev->clk_mux_mem || !csiphy_dev->clk_mux_io) {
@@ -428,7 +427,7 @@ static int msm_csiphy_init(struct csiphy_device *csiphy_dev)
 
 		CDBG("%s:%d called\n", __func__, __LINE__);
 		rc = msm_cam_clk_enable(&csiphy_dev->pdev->dev,
-			csiphy_clk_info, csiphy_dev->csiphy_clk,
+			csiphy_dev->csiphy_clk_info, csiphy_dev->csiphy_clk,
 			csiphy_dev->num_clk, 1);
 	} else {
 		pr_err("%s: ERROR Invalid CSIPHY Version %d",
@@ -547,7 +546,7 @@ static int msm_csiphy_init(struct csiphy_device *csiphy_dev)
 	if (csiphy_dev->hw_dts_version <= CSIPHY_VERSION_V22) {
 		CDBG("%s:%d called\n", __func__, __LINE__);
 		rc = msm_cam_clk_enable(&csiphy_dev->pdev->dev,
-			csiphy_clk_info, csiphy_dev->csiphy_clk,
+			csiphy_dev->csiphy_clk_info, csiphy_dev->csiphy_clk,
 			csiphy_dev->num_clk, 1);
 	} else if (csiphy_dev->hw_dts_version >= CSIPHY_VERSION_V30) {
 		if (!csiphy_dev->clk_mux_mem || !csiphy_dev->clk_mux_io) {
@@ -567,7 +566,7 @@ static int msm_csiphy_init(struct csiphy_device *csiphy_dev)
 		}
 		CDBG("%s:%d called\n", __func__, __LINE__);
 		rc = msm_cam_clk_enable(&csiphy_dev->pdev->dev,
-			csiphy_clk_info, csiphy_dev->csiphy_clk,
+			csiphy_dev->csiphy_clk_info, csiphy_dev->csiphy_clk,
 			csiphy_dev->num_clk, 1);
 	} else {
 		pr_err("%s: ERROR Invalid CSIPHY Version %d",
@@ -694,11 +693,11 @@ static int msm_csiphy_release(struct csiphy_device *csiphy_dev, void *arg)
 
 	if (csiphy_dev->hw_dts_version <= CSIPHY_VERSION_V22) {
 		msm_cam_clk_enable(&csiphy_dev->pdev->dev,
-			csiphy_clk_info, csiphy_dev->csiphy_clk,
+			csiphy_dev->csiphy_clk_info, csiphy_dev->csiphy_clk,
 			csiphy_dev->num_clk, 0);
 	} else if (csiphy_dev->hw_dts_version >= CSIPHY_VERSION_V30) {
 		msm_cam_clk_enable(&csiphy_dev->pdev->dev,
-			csiphy_clk_info, csiphy_dev->csiphy_clk,
+			csiphy_dev->csiphy_clk_info, csiphy_dev->csiphy_clk,
 			csiphy_dev->num_clk, 0);
 			iounmap(csiphy_dev->clk_mux_base);
 	}
@@ -794,11 +793,11 @@ static int msm_csiphy_release(struct csiphy_device *csiphy_dev, void *arg)
 
 	if (csiphy_dev->hw_dts_version <= CSIPHY_VERSION_V22) {
 		msm_cam_clk_enable(&csiphy_dev->pdev->dev,
-			csiphy_clk_info, csiphy_dev->csiphy_clk,
+			csiphy_dev->csiphy_clk_info, csiphy_dev->csiphy_clk,
 			csiphy_dev->num_clk, 0);
 	} else if (csiphy_dev->hw_dts_version >= CSIPHY_VERSION_V30) {
 		msm_cam_clk_enable(&csiphy_dev->pdev->dev,
-			csiphy_clk_info, csiphy_dev->csiphy_clk,
+			csiphy_dev->csiphy_clk_info, csiphy_dev->csiphy_clk,
 			csiphy_dev->num_clk, 0);
 			iounmap(csiphy_dev->clk_mux_base);
 	}
@@ -971,9 +970,9 @@ static int msm_csiphy_get_clk_info(struct csiphy_device *csiphy_dev,
 
 	for (i = 0; i < count; i++) {
 		rc = of_property_read_string_index(of_node, "clock-names",
-				i, &(csiphy_clk_info[i].clk_name));
+				i, &(csiphy_dev->csiphy_clk_info[i].clk_name));
 		CDBG("%s: clock-names[%d] = %s\n", __func__,
-			i, csiphy_clk_info[i].clk_name);
+			i, csiphy_dev->csiphy_clk_info[i].clk_name);
 		if (rc < 0) {
 			pr_err("%s:%d, failed\n", __func__, __LINE__);
 			return rc;
@@ -986,9 +985,9 @@ static int msm_csiphy_get_clk_info(struct csiphy_device *csiphy_dev,
 		return rc;
 	}
 	for (i = 0; i < count; i++) {
-		csiphy_clk_info[i].clk_rate = (rates[i] == 0) ?
+		csiphy_dev->csiphy_clk_info[i].clk_rate = (rates[i] == 0) ?
 				(long)-1 : rates[i];
-		if (!strcmp(csiphy_clk_info[i].clk_name,
+		if (!strcmp(csiphy_dev->csiphy_clk_info[i].clk_name,
 				"csiphy_timer_src_clk")) {
 			CDBG("%s:%d, copy csiphy_timer_src_clk",
 				__func__, __LINE__);
@@ -996,7 +995,7 @@ static int msm_csiphy_get_clk_info(struct csiphy_device *csiphy_dev,
 			csiphy_dev->csiphy_clk_index = i;
 		}
 		CDBG("%s: clk_rate[%d] = %ld\n", __func__, i,
-			csiphy_clk_info[i].clk_rate);
+			csiphy_dev->csiphy_clk_info[i].clk_rate);
 	}
 	return 0;
 }
