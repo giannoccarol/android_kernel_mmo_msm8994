@@ -112,3 +112,18 @@
 &pm8994_l23 {
 	/delete-property/ regulator-always-on;
 };
+
+/*
+ * Both PMI8994 torch channels drive the iris IR illuminator (measured with the
+ * iris camera, 6/11/2026: 50 + 50 mA on the two channels give the same image
+ * as 100 mA on one). Userspace only pulses it (frames of the iris camera, at
+ * most 70 ms on). Switch each channel off in the kernel 100 ms after its last
+ * non-zero write, so a crashed or stuck client cannot leave it lit.
+ */
+&pmi8994_torch0 {
+	qcom,auto-off-ms = <100>;
+};
+
+&pmi8994_torch1 {
+	qcom,auto-off-ms = <100>;
+};

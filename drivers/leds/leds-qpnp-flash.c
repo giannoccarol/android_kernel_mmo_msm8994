@@ -161,6 +161,13 @@ struct flash_node_data {
 	struct spmi_device		*spmi_dev;
 	struct led_classdev		cdev;
 	struct work_struct		work;
+	/*
+	 * qcom,auto-off-ms: switch the LED off this long after the last
+	 * non-zero brightness write, whatever userspace does. Used for the
+	 * Lumia 950 XL iris illuminator, which userspace only pulses.
+	 */
+	struct delayed_work		auto_off_work;
+	u32				auto_off_ms;
 	struct flash_regulator_data	*reg_data;
 	u16				max_current;
 	u16				prgm_current;
@@ -1214,6 +1221,18 @@ error_enable_gpio:
 	return;
 }
 
+static void qpnp_flash_led_auto_off(struct work_struct *work)
+{
+	struct flash_node_data *flash_node = container_of(to_delayed_work(work),
+					struct flash_node_data, auto_off_work);
+
+	if (!flash_node->cdev.brightness)
+		return;
+	pr_warn_ratelimited("%s: on for more than %u ms, switching off\n",
+			flash_node->cdev.name, flash_node->auto_off_ms);
+	led_set_brightness(&flash_node->cdev, LED_OFF);
+}
+
 static void qpnp_flash_led_brightness_set(struct led_classdev *led_cdev,
 						enum led_brightness value)
 {
@@ -1231,6 +1250,13 @@ static void qpnp_flash_led_brightness_set(struct led_classdev *led_cdev,
 		value = flash_node->cdev.max_brightness;
 
 	flash_node->cdev.brightness = value;
+	if (flash_node->auto_off_ms) {
+		if (value)
+			mod_delayed_work(system_wq, &flash_node->auto_off_work,
+				msecs_to_jiffies(flash_node->auto_off_ms));
+		else
+			cancel_delayed_work(&flash_node->auto_off_work);
+	}
 	if (led->flash_node[led->num_leds - 1].id ==
 						FLASH_LED_SWITCH) {
 		if (flash_node->type == TORCH)
@@ -1807,6 +1833,10 @@ static int qpnp_flash_led_probe(struct spmi_device *spmi)
 		led->flash_node[i].spmi_dev = spmi;
 
 		INIT_WORK(&led->flash_node[i].work, qpnp_flash_led_work);
+		INIT_DELAYED_WORK(&led->flash_node[i].auto_off_work,
+						qpnp_flash_led_auto_off);
+		if (of_property_read_u32(temp, "qcom,auto-off-ms", &val) == 0)
+			led->flash_node[i].auto_off_ms = val;
 		rc = of_property_read_string(temp, "qcom,led-name",
 						&led->flash_node[i].cdev.name);
 		if (rc < 0) {
@@ -1905,6 +1935,7 @@ static int qpnp_flash_led_remove(struct spmi_device *spmi)
 	int i, j;
 
 	for (i = led->num_leds - 1; i >= 0; i--) {
+		cancel_delayed_work_sync(&led->flash_node[i].auto_off_work);
 		if (led->flash_node[i].reg_data) {
 			if (led->flash_node[i].flash_on)
 				flash_regulator_enable(led,
