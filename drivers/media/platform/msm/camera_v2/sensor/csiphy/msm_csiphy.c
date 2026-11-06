@@ -54,6 +54,19 @@ static struct v4l2_file_operations msm_csiphy_v4l2_subdev_fops;
  */
 static int cityman_combo_clk_lane = 3;
 module_param(cityman_combo_clk_lane, int, 0644);
+/*
+ * Windows (qccam CSI driver) writes MISC1 = 0x06/0x0A on PHY lanes 3/4 in
+ * combo mode: bit 1 on top of the clock (0x4) / data (0x8) value, only on
+ * the two lanes of the second port. OR-ed in when set.
+ */
+static int cityman_combo_misc1_or = 0x2;
+module_param(cityman_combo_misc1_or, int, 0644);
+/* Windows sets bit 1 of 0xFDA00044 (PHY2 port B gate) for the iris. */
+static int cityman_phy_cgc = 1;
+module_param(cityman_phy_cgc, int, 0644);
+/* Windows lane CFG1/2/4/5 = 0x00/0x3F/0xFF/0x22 instead of CFG2 = 0x10. */
+static int cityman_win_lane_cfg;
+module_param(cityman_win_lane_cfg, int, 0644);
 
 static int msm_csiphy_lane_config(struct csiphy_device *csiphy_dev,
 	struct msm_camera_csiphy_params *csiphy_params)
@@ -134,6 +147,20 @@ static int msm_csiphy_lane_config(struct csiphy_device *csiphy_dev,
 		CDBG("%s clk mux addr %pK val 0x%x\n", __func__,
 			csiphy_dev->clk_mux_base, val);
 		mb();
+		if (csiphy_dev->clk_mux_mem &&
+			resource_size(csiphy_dev->clk_mux_mem) >= 8) {
+			uint32_t cgc = msm_camera_io_r(csiphy_dev->clk_mux_base + 4);
+			pr_info("%s: clk mux 0x%x cgc 0x%x (before)\n", __func__,
+				msm_camera_io_r(csiphy_dev->clk_mux_base), cgc);
+			if (cityman_phy_cgc && csiphy_params->combo_mode &&
+				(csiphy_params->lane_mask & 0x18) == 0x18) {
+				msm_camera_io_w(cgc | 0x2,
+					csiphy_dev->clk_mux_base + 4);
+				mb();
+				pr_info("%s: cgc 0x%x (after)\n", __func__,
+					msm_camera_io_r(csiphy_dev->clk_mux_base + 4));
+			}
+		}
 	}
 	msm_camera_io_w(0x1, csiphybase + csiphy_dev->ctrl_reg->
 		csiphy_reg.mipi_csiphy_glbl_t_init_cfg0_addr);
@@ -180,9 +207,20 @@ static int msm_csiphy_lane_config(struct csiphy_device *csiphy_dev,
 			lane_mask >>= 1;
 			continue;
 		}
-		msm_camera_io_w(0x10,
-			csiphybase + csiphy_dev->ctrl_reg->csiphy_reg.
-			mipi_csiphy_lnn_cfg2_addr + 0x40*j);
+		if (cityman_win_lane_cfg) {
+			msm_camera_io_w(0x00, csiphybase + csiphy_dev->ctrl_reg->
+				csiphy_reg.mipi_csiphy_lnn_cfg1_addr + 0x40*j);
+			msm_camera_io_w(0x3F, csiphybase + csiphy_dev->ctrl_reg->
+				csiphy_reg.mipi_csiphy_lnn_cfg2_addr + 0x40*j);
+			msm_camera_io_w(0xFF, csiphybase + csiphy_dev->ctrl_reg->
+				csiphy_reg.mipi_csiphy_lnn_cfg4_addr + 0x40*j);
+			msm_camera_io_w(0x22, csiphybase + csiphy_dev->ctrl_reg->
+				csiphy_reg.mipi_csiphy_lnn_cfg5_addr + 0x40*j);
+		} else {
+			msm_camera_io_w(0x10,
+				csiphybase + csiphy_dev->ctrl_reg->csiphy_reg.
+				mipi_csiphy_lnn_cfg2_addr + 0x40*j);
+		}
 		msm_camera_io_w(csiphy_params->settle_cnt,
 			csiphybase + csiphy_dev->ctrl_reg->csiphy_reg.
 			mipi_csiphy_lnn_cfg3_addr + 0x40*j);
@@ -217,8 +255,9 @@ static int msm_csiphy_lane_config(struct csiphy_device *csiphy_dev,
 				*/
 				if ((csiphy_params->lane_mask & 0x18) == 0x18 &&
 					(j == 3 || j == 4))
-					lane_val = (j == cityman_combo_clk_lane) ?
-						0x4 : 0x8;
+					lane_val = ((j == cityman_combo_clk_lane) ?
+						0x4 : 0x8) |
+						(cityman_combo_misc1_or & 0x2);
 			}
 			msm_camera_io_w(lane_val, csiphybase +
 				csiphy_dev->ctrl_reg->csiphy_reg.
@@ -230,6 +269,24 @@ static int msm_csiphy_lane_config(struct csiphy_device *csiphy_dev,
 		}
 		j++;
 		lane_mask >>= 1;
+	}
+	if ((csiphy_params->lane_mask & 0x18) == 0x18) {
+		int l;
+
+		pr_info("%s: glbl reset 0x%x pwr 0x%x 0x1ec 0x%x\n", __func__,
+			msm_camera_io_r(csiphybase + 0x140),
+			msm_camera_io_r(csiphybase + 0x144),
+			msm_camera_io_r(csiphybase + 0x1ec));
+		for (l = 3; l <= 4; l++)
+			pr_info("%s: lane %d cfg1-5 %x %x %x %x %x imp %x misc1 %x\n",
+				__func__, l,
+				msm_camera_io_r(csiphybase + 0x40*l + 0x0),
+				msm_camera_io_r(csiphybase + 0x40*l + 0x4),
+				msm_camera_io_r(csiphybase + 0x40*l + 0x8),
+				msm_camera_io_r(csiphybase + 0x40*l + 0xc),
+				msm_camera_io_r(csiphybase + 0x40*l + 0x10),
+				msm_camera_io_r(csiphybase + 0x40*l + 0x1c),
+				msm_camera_io_r(csiphybase + 0x40*l + 0x28));
 	}
 	return rc;
 }

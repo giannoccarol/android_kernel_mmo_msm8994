@@ -72,7 +72,7 @@
 		cell-index = <2>;
 		compatible = "qcom,csiphy-v3.1.1", "qcom,csiphy";
 		reg = <0xfda0b400 0x200>,
-                      <0xfda00040 0x4>;
+                      <0xfda00040 0x8>;
 		reg-names = "csiphy", "csiphy_clk_mux";
 		interrupts = <0 80 0>;
 		interrupt-names = "csiphy";
