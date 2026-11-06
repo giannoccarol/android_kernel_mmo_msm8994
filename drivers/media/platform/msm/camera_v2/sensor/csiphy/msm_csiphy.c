@@ -47,6 +47,14 @@ static struct camera_vreg_t csiphy_vreg_info[] = {
 static struct msm_cam_clk_info csiphy_clk_info[CSIPHY_NUM_CLK_MAX];
 static struct v4l2_file_operations msm_csiphy_v4l2_subdev_fops;
 
+/*
+ * cityman iris bring-up: PHY lane used as clock by the second sensor in
+ * combo mode (lane_mask 0x18). Qualcomm code assumes lane 3; 4 swaps clock
+ * and data for a test. Writable at runtime.
+ */
+static int cityman_combo_clk_lane = 3;
+module_param(cityman_combo_clk_lane, int, 0644);
+
 static int msm_csiphy_lane_config(struct csiphy_device *csiphy_dev,
 	struct msm_camera_csiphy_params *csiphy_params)
 {
@@ -106,11 +114,11 @@ static int msm_csiphy_lane_config(struct csiphy_device *csiphy_dev,
 	}
 
 	/* cityman bring-up: the PHY setup comes from the userspace sensor library */
-	pr_info("%s: csiphy %d lane_mask 0x%x lane_cnt %d settle 0x%x csid %d combo %d clk %u\n",
+	pr_info("%s: csiphy %d lane_mask 0x%x lane_cnt %d settle 0x%x csid %d combo %d clk %u combo_clk_lane %d\n",
 		__func__, csiphy_dev->pdev->id, csiphy_params->lane_mask,
 		csiphy_params->lane_cnt, csiphy_params->settle_cnt,
 		csiphy_params->csid_core, csiphy_params->combo_mode,
-		csiphy_params->csiphy_clk);
+		csiphy_params->csiphy_clk, cityman_combo_clk_lane);
 
 	if (csiphy_dev->hw_version >= CSIPHY_VERSION_V30) {
 		val = msm_camera_io_r(csiphy_dev->clk_mux_base);
@@ -207,10 +215,10 @@ static int msm_csiphy_lane_config(struct csiphy_device *csiphy_dev,
 				* So check whether the sensor is of one lane
 				* sensor and curr_lane for 0.
 				*/
-				if (curr_lane == 0 &&
-					((csiphy_params->lane_mask &
-						0x18) == 0x18))
-					lane_val = 0x4;
+				if ((csiphy_params->lane_mask & 0x18) == 0x18 &&
+					(j == 3 || j == 4))
+					lane_val = (j == cityman_combo_clk_lane) ?
+						0x4 : 0x8;
 			}
 			msm_camera_io_w(lane_val, csiphybase +
 				csiphy_dev->ctrl_reg->csiphy_reg.
