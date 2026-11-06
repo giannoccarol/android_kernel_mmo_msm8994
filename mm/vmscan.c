@@ -191,20 +191,33 @@ static unsigned long get_lru_size(struct lruvec *lruvec, enum lru_list lru)
 
 struct dentry *debug_file;
 
+static bool shrinker_callbacks_valid(struct shrinker *s);
+
 static int debug_shrinker_show(struct seq_file *s, void *unused)
 {
 	struct shrinker *shrinker;
-	struct shrink_control sc;
-
-	sc.gfp_mask = -1;
-	sc.nr_to_scan = 0;
+	struct shrink_control sc = {
+		.gfp_mask = -1,
+		.nr_to_scan = 0,
+	};
 
 	down_read(&shrinker_rwsem);
 	list_for_each_entry(shrinker, &shrinker_list, list) {
-		int num_objs;
+		long num_objs;
 
-		num_objs = shrinker->shrink(shrinker, &sc);
-		seq_printf(s, "%pf %d\n", shrinker->shrink, num_objs);
+		/* Shrinkers with the count/scan API have no ->shrink. */
+		if (!shrinker_callbacks_valid(shrinker)) {
+			seq_printf(s, "%p invalid\n", shrinker);
+			continue;
+		}
+		if (shrinker->count_objects) {
+			sc.nid = 0;
+			num_objs = shrinker->count_objects(shrinker, &sc);
+			seq_printf(s, "%pf %ld\n", shrinker->count_objects, num_objs);
+		} else {
+			num_objs = shrinker->shrink(shrinker, &sc);
+			seq_printf(s, "%pf %ld\n", shrinker->shrink, num_objs);
+		}
 	}
 	up_read(&shrinker_rwsem);
 	return 0;
@@ -247,7 +260,7 @@ int register_shrinker(struct shrinker *shrinker)
 	down_write(&shrinker_rwsem);
 	list_add_tail(&shrinker->list, &shrinker_list);
 	up_write(&shrinker_rwsem);
-	pr_info("shrinker: %p registered by %pS (count=%pF scan=%pF shrink=%pF)\n",
+	pr_debug("shrinker: %p registered by %pS (count=%pF scan=%pF shrink=%pF)\n",
 		shrinker, __builtin_return_address(0), shrinker->count_objects,
 		shrinker->scan_objects, shrinker->shrink);
 	return 0;
@@ -268,7 +281,7 @@ late_initcall(add_shrinker_debug);
  */
 void unregister_shrinker(struct shrinker *shrinker)
 {
-	pr_info("shrinker: %p unregistered by %pS\n", shrinker,
+	pr_debug("shrinker: %p unregistered by %pS\n", shrinker,
 		__builtin_return_address(0));
 	down_write(&shrinker_rwsem);
 	list_del(&shrinker->list);
@@ -459,11 +472,18 @@ unsigned long shrink_slab(struct shrink_control *shrinkctl,
 
 	list_for_each_entry(shrinker, &shrinker_list, list) {
 		if (!shrinker_callbacks_valid(shrinker)) {
-			pr_err_ratelimited("shrinker: bad entry %p (count=%p scan=%p shrink=%p next=%p prev=%p), stopping slab shrink\n",
+			pr_err_ratelimited("shrinker: bad entry %p (count=%p scan=%p shrink=%p next=%p prev=%p), skipping it\n",
 				shrinker, shrinker->count_objects,
 				shrinker->scan_objects, shrinker->shrink,
 				shrinker->list.next, shrinker->list.prev);
-			break;
+			/*
+			 * A freed entry (poisoned links) cannot be stepped over:
+			 * stop there. Otherwise skip only the bad shrinker.
+			 */
+			if (shrinker->list.next == LIST_POISON1 ||
+			    !virt_addr_valid(shrinker->list.next))
+				break;
+			continue;
 		}
 		for_each_node_mask(shrinkctl->nid, shrinkctl->nodes_to_scan) {
 			if (!node_online(shrinkctl->nid))

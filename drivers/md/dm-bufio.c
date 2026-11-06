@@ -1474,7 +1474,11 @@ struct dm_bufio_client *dm_bufio_client_create(struct block_device *bdev, unsign
 	BUG_ON(block_size < 1 << SECTOR_SHIFT ||
 	       (block_size & (block_size - 1)));
 
-	c = kmalloc(sizeof(*c), GFP_KERNEL);
+	/*
+	 * Zeroed: the shrinker below only sets shrink/seeks/batch, and
+	 * shrink_slab() also reads count_objects, scan_objects and flags.
+	 */
+	c = kzalloc(sizeof(*c), GFP_KERNEL);
 	if (!c) {
 		r = -ENOMEM;
 		goto bad_client;
