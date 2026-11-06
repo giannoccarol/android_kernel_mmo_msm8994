@@ -83,14 +83,19 @@
 			<&clock_mmss clk_camss_ispif_ahb_clk>,
 			<&clock_mmss clk_csi2_clk_src>,
 			<&clock_mmss clk_camss_csi2phy_clk>,
+			<&clock_mmss clk_camss_csi3phy_clk>,
 			<&clock_mmss clk_csi2phytimer_clk_src>,
 			<&clock_mmss clk_camss_phy2_csi2phytimer_clk>,
 			<&clock_mmss clk_camss_ahb_clk>;
+		/*
+		 * csi3phy gates PHY2 -> CSID3: the iris camera is the second
+		 * sensor of PHY2 in combo mode (Windows PEP turns it on for CAMT).
+		 */
 		clock-names = "camss_top_ahb_clk",
 			"ispif_ahb_clk", "csi_src_clk",
-			"csi_phy_clk", "csiphy_timer_src_clk",
+			"csi_phy_clk", "csi3_phy_clk", "csiphy_timer_src_clk",
 			"csiphy_timer_clk", "camss_ahb_clk";
-		qcom,clock-rates = <0 0 240000000 0 200000000 0 0>;
+		qcom,clock-rates = <0 0 240000000 0 0 200000000 0 0>;
 	};
 
 	csid0: qcom,csid@fda08000  {
