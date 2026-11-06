@@ -261,6 +261,73 @@
 			 <&clock_mmss clk_camss_mclk2_clk>;
 		clock-names = "cam_src_clk", "cam_clk";
 	};
+
+	/*
+	 * Iris: Windows Hello IR camera (ACPI CAMT, QCOM2436), module
+	 * "Jopo" by Foxconn, Toshiba SMIA sensor (CDCC 0C086101: SMIA
+	 * manufacturer 0x0c, model 0x0861, revision 0x01).
+	 *
+	 *   CSID3 fed by CSIPHY2 in 2+1 combo mode (the DSDT votes
+	 *   camss_phy2_csi2phytimer_clk for CAMT; the Windows driver logs
+	 *   "PHY Combo (2+1) mode 1 lanes"): one data lane, PHY lanes 3/4.
+	 *   MCLK1 9.6 MHz (GPIO 14), reset GPIO 102 (driven by the PEP in
+	 *   CAMT D0, 3 ms after MCLK), standby/enable GPIO 106.
+	 *   VDIG L3 1.2 V (80 mA vote), VANA L17 2.8 V, VIO LVS1 1.8 V.
+	 *   The PEP also votes PMI8994 boost bypass (4.0 V) for CAMT: that
+	 *   is the supply of the IR illuminator (PMI8994 flash block 0xd300,
+	 *   ACPI FLHT), not of the sensor.
+	 *
+	 * The CCI master and slave address are not in the ACPI tables.
+	 * Master 0 is the first guess: CAMT depends on CAMF (_DEP) and
+	 * shares its PHY.  Confirm with cci_probe 2 before trusting it.
+	 * Kept on cell-index 2 so the rear/front slots and HAL ids stay.
+	 */
+	qcom,camera@2 {
+		cell-index = <2>;
+		compatible = "qcom,camera";
+		reg = <0x2>;
+		qcom,csiphy-sd-index = <2>;
+		qcom,csid-sd-index = <3>;
+		qcom,mount-angle = <90>;
+		cam_vdig-supply = <&pm8994_l3>;
+		cam_vana-supply = <&pm8994_l17>;
+		cam_vio-supply = <&pm8994_lvs1>;
+		qcom,cam-vreg-name = "cam_vdig", "cam_vana", "cam_vio";
+		qcom,cam-vreg-min-voltage = <1200000 2800000 0>;
+		qcom,cam-vreg-max-voltage = <1200000 2800000 0>;
+		qcom,cam-vreg-op-mode = <80000 300000 0>;
+		/* DSDT CAMT D0 order: L17, LVS1, (S3), L3, clocks, MCLK, reset */
+		qcom,cam-power-seq-type = "sensor_vreg", "sensor_vreg",
+					  "sensor_vreg", "sensor_gpio",
+					  "sensor_clk", "sensor_gpio";
+		qcom,cam-power-seq-val = "cam_vana", "cam_vio", "cam_vdig",
+					 "sensor_gpio_standby",
+					 "sensor_cam_mclk",
+					 "sensor_gpio_reset";
+		qcom,cam-power-seq-cfg-val = <1 1 1 1 9600000 1>;
+		qcom,cam-power-seq-delay = <1 1 1 1 1 3>;
+		qcom,gpio-no-mux = <0>;
+		pinctrl-names = "cam_default", "cam_suspend";
+		pinctrl-0 = <&cam_sensor_mclk1_active &cam_sensor_iris_active>;
+		pinctrl-1 = <&cam_sensor_mclk1_suspend &cam_sensor_iris_suspend>;
+		gpios = <&msm_gpio 14 0>,
+			<&msm_gpio 102 0>,
+			<&msm_gpio 106 0>;
+		qcom,gpio-reset = <1>;
+		qcom,gpio-standby = <2>;
+		qcom,gpio-req-tbl-num = <0 1 2>;
+		qcom,gpio-req-tbl-flags = <1 0 0>;
+		qcom,gpio-req-tbl-label = "CAMIF_MCLK1",
+					  "CAM_RESET_IRIS",
+					  "CAM_STANDBY_IRIS";
+		qcom,sensor-position = <1>;
+		qcom,sensor-mode = <0>;
+		qcom,cci-master = <0>;
+		status = "ok";
+		clocks = <&clock_mmss clk_mclk1_clk_src>,
+			 <&clock_mmss clk_camss_mclk1_clk>;
+		clock-names = "cam_src_clk", "cam_clk";
+	};
 };
 
 /*
@@ -273,3 +340,45 @@
 &csid0 {
 	qcom,csi-lane-assign = <0x0423>;
 };
+
+/*
+ * Iris reset (GPIO 102) and standby/enable (GPIO 106): both are in the
+ * ACPI CAMP resource list; the PEP drives 102 for CAMT, 106 is left to
+ * the camera driver, as 105 is for the front camera.
+ */
+&tlmm_pinmux {
+	cam_sensor_iris_active {
+		/* RESET, STANDBY */
+		qcom,pins = <&gp 102>, <&gp 106>;
+		qcom,num-grp-pins = <2>;
+		label = "cam_sensor_iris_active";
+		cam_sensor_iris_active: cam_sensor_iris_active {
+			drive-strength = <2>; /* 2 MA */
+			bias-disable; /* No PULL */
+		};
+	};
+
+	cam_sensor_iris_suspend {
+		/* RESET, STANDBY */
+		qcom,pins = <&gp 102>, <&gp 106>;
+		qcom,num-grp-pins = <2>;
+		label = "cam_sensor_iris_suspend";
+		cam_sensor_iris_suspend: cam_sensor_iris_suspend {
+			drive-strength = <2>; /* 2 MA */
+			bias-pull-down; /* PULL DOWN */
+		};
+	};
+};
+
+/*
+ * Iris illuminator.  ACPI FLHT (QCOM244C, the "tertiary flash" driven by
+ * qccamflashtertiary8994.sys) uses PMIC interrupt pins 0xe9e/0xe9f, bits
+ * 6/7 of peripheral 0x1d3: PMI8994 SID 3, flash block 0xd300.  The IR LED
+ * therefore hangs on the qpnp-flash-led channels already described in
+ * msm-pmi8994.dtsi (led:torch_0/1, led:flash_0/1); no new node is needed
+ * for a first test from sysfs.  The Windows driver (LED module 7) only
+ * accepts four assist levels, 13/20/30/100 %, mapped to current codes
+ * 0x0a/0x0f/0x17/0x16, and caps pulses at 10 ms (flash) or 70 ms.
+ * It is not wired to msm_flash on purpose: a PMIC camera-flash node would
+ * register torch-light0 and the HAL torch could light the IR LED.
+ */
