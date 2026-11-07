@@ -22,8 +22,13 @@
 	qcom,fg-cutoff-voltage-mv = <2800>;
 	qcom,warm-bat-decidegc = <450>;
 	qcom,hot-bat-decidegc = <550>;
-	qcom,cool-bat-decidegc = <(-50)>;
-	qcom,cold-bat-decidegc = <(-100)>;
+	/*
+	 * As Windows (cityman_qcbattmngr8994.inf): reduced current below
+	 * 15 C (fastchg-current-comp, also used when warm) and no charging
+	 * below 0 C, instead of full current down to -5 C.
+	 */
+	qcom,cool-bat-decidegc = <150>;
+	qcom,cold-bat-decidegc = <0>;
 	qcom,vbat-estimate-diff-mv = <200>;
 	qcom,thermal-coefficients = [EC 85 76 4A FC 35];
 };

@@ -1607,7 +1607,8 @@ static int smbchg_set_fastchg_current(struct smbchg_chip *chip,
 	if (chip->sw_esr_pulse_en)
 		current_ma = 300;
 
-	if (chip->customized_jeita && chip->batt_warm)
+	/* Reduced current in the soft warm and soft cool zones. */
+	if (chip->customized_jeita && (chip->batt_warm || chip->batt_cool))
 		current_ma = min(current_ma, chip->fastchg_current_comp);
 
 	/* If the requested FCC is same, do not configure it again */
@@ -4504,8 +4505,16 @@ static irqreturn_t batt_cool_handler(int irq, void *_chip)
 	chip->batt_cool = !!(reg & COLD_BAT_SOFT_BIT);
 	pr_smb(PR_INTERRUPT, "triggered: 0x%02x\n", reg);
 
-	if (chip->customized_jeita && !chip->batt_cool)
-		smbchg_battchg_en(chip, 1, REASON_BATTCHG_THERM, &unused);
+	if (chip->batt_cool)
+		pr_info("reduced ibat (cool)\n");
+
+	if (chip->customized_jeita) {
+		smbchg_set_fastchg_current(chip,
+				chip->cfg_fastchg_current_ma);
+		if (!chip->batt_cool)
+			smbchg_battchg_en(chip, 1,
+				REASON_BATTCHG_THERM, &unused);
+	}
 
 	smbchg_parallel_usb_check_ok(chip);
 	if (chip->psy_registered)
