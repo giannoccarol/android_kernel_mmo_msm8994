@@ -1,0 +1,12 @@
+# One-shot: set the modem's "ims" 3GPP profile to IPv4v6 so that rild's
+# profile lookup accepts Android's IMS APN. Talks only to qmuxd (radio group).
+service cityman-ims-profile /vendor/bin/cityman-ims-profile
+    class main
+    user radio
+    group radio log
+    setenv LD_PRELOAD /vendor/lib64/libcityman_ds_target.so
+    oneshot
+    disabled
+
+on property:init.svc.qmuxd=running
+    start cityman-ims-profile

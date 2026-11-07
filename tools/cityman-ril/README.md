@@ -93,6 +93,27 @@ SoC 207, the exact boot token `androidboot.dtb_idx=1`, and the scoped shim.
 Support for multiple applications/cards and hotplug is not established. Recovery
 after sustained modem failures needs further validation. Do not enable on Talkman.
 
+## IMS profile helper (VoLTE groundwork)
+
+The Windows MPSS ships 3GPP profile 2 with APN `ims` and PDP type IPv4.
+Android asks for the IMS APN as IPv6 (AOSP `apns-conf`, Iliad 222-50), and the
+vendor profile lookup inside rild (libqdp) rejects an existing modem profile
+with another IP type: `qcril_data_apn_based_profile_look_up_using_qdp failed`,
+`profile lookup failed with abort call status`, and SETUP_DATA_CALL never
+reaches the network. Asking for IPv4 instead reaches the network, but Iliad
+answers ESM cause #51 (IPv6 only).
+
+`cityman-ims-profile` (one-shot, started with qmuxd, user `radio`) sets every
+3GPP profile whose APN is `ims` to IPv4v6 and writes only when the type
+differs. Measured on 2026-11-07 (Android 16, build 75, Iliad): with the profile
+in IPv6 or IPv4v6, the IMS PDN comes up on `rmnet_data1` with an IPv6 address
+and two P-CSCF addresses; the P-CSCF answers a first REGISTER with `401`,
+`AKAv1-MD5` and `Security-Server: ipsec-3gpp`, and the USIM computes the AKA
+answer for the real challenge. An IMS client (MmTel service) is still needed
+for VoLTE. Rollback: `MODIFY_PROFILE_SETTINGS` back to PDP type 0 for that
+profile (for example with `qmi-client-query wds_qmi_idl_service_object_v01
+0x28 010200000211010000`).
+
 ## Registration and data: hardware results
 
 On both the RAM-only EFS-layout test kernel #37 and the unchanged installed

@@ -31,3 +31,14 @@ LOCAL_INIT_RC := cityman-uim-bootstrap.rc
 LOCAL_VENDOR_MODULE := true
 LOCAL_MULTILIB := 64
 include $(BUILD_EXECUTABLE)
+
+# Modem "ims" profile: IPv4 from the Windows MPSS, IPv4v6 for Android's IMS APN.
+include $(CLEAR_VARS)
+LOCAL_MODULE := cityman-ims-profile
+LOCAL_SRC_FILES := cityman-ims-profile.c
+LOCAL_CFLAGS := -Wall -Wextra -Werror
+LOCAL_SHARED_LIBRARIES := libdl liblog
+LOCAL_INIT_RC := cityman-ims-profile.rc
+LOCAL_VENDOR_MODULE := true
+LOCAL_MULTILIB := 64
+include $(BUILD_EXECUTABLE)
