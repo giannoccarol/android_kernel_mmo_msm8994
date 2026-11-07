@@ -3072,6 +3072,14 @@ static int smbchg_update_input_max(struct smbchg_chip *chip)
 
 	if (!is_usb_present(chip) || !chip->aicl_complete)
 		return 0;
+	/*
+	 * 0 means AICL is suspended or unreadable, not a measured limit.
+	 * Taking it as the input limit set iusb = 0 at boot on a PC port and,
+	 * once the port was typed SDP, nothing raised it again: the phone
+	 * did not charge from a computer.
+	 */
+	if (aicl_level <= 0)
+		return 0;
 
 	rc = chip->usb_psy->get_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_TYPE, &prop);
