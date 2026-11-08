@@ -60,11 +60,15 @@
 #define TC_UFP_DFP		5
 
 /* PD 2.0 */
+#define PD_CTRL_GOTOMIN		2
 #define PD_CTRL_ACCEPT		3
 #define PD_CTRL_REJECT		4
 #define PD_CTRL_PS_RDY		6
 #define PD_CTRL_GET_SRC_CAP	7
 #define PD_CTRL_GET_SINK_CAP	8
+#define PD_CTRL_DR_SWAP		9
+#define PD_CTRL_PR_SWAP		10
+#define PD_CTRL_VCONN_SWAP	11
 #define PD_CTRL_SOFT_RESET	13
 #define PD_DATA_SRC_CAP		1
 #define PD_DATA_REQUEST		2
@@ -83,6 +87,11 @@
 #define VDM_ATTENTION		6
 #define VDM_DP_STATUS		16
 #define VDM_DP_CONFIG		17
+#define VDM_TYPE(vh)		(((vh) >> 6) & 3)	/* 0 REQ, 1 ACK, 2 NAK, 3 BUSY */
+#define VDM_TRIES		3	/* sends of a VDM nobody answers */
+
+#define DP_STATUS_HPD		BIT(7)
+#define DP_STATUS_IRQ_HPD	BIT(8)
 
 #define MSG_Q			8
 
@@ -138,6 +147,8 @@ struct uc120 {
 	struct pd_msg q[MSG_Q];
 	int qh, qt;
 	bool vconn_on, vbus_on, hpd, cable;
+	bool hpd_pending;		/* Attention with HPD high during discovery */
+	u32 dp_status;			/* last DP status from an Attention */
 	int pin;
 	int hard_resets;
 	u32 partner_id;
@@ -429,14 +440,42 @@ static bool msg_is(const struct pd_msg *m, int type, bool data)
 	return (msg_hdr(m) & 0xf) == type && (msg_ndo(m) > 0) == data;
 }
 
-/* Structured VDM with ACK; BUSY is retried, NAK/no answer fail */
+static void uc120_handle_msg(struct uc120 *uc, struct pd_msg *m);
+
+/*
+ * A message from the partner while we wait for a VDM answer. Some docks
+ * send their own requests (Get_Sink_Cap, swaps, VDMs) right after the
+ * contract and stop answering until they get a reply, so answer them
+ * instead of dropping them. An Attention with HPD high is remembered for
+ * the end of the DisplayPort setup.
+ */
+static void uc120_answer(struct uc120 *uc, struct pd_msg *m)
+{
+	u32 vh = msg_ndo(m) ? msg_do(m, 0) : 0;
+
+	dev_info(uc->dev, "partner message %04x %08x during discovery\n",
+		 msg_hdr(m), vh);
+	if (msg_is(m, PD_DATA_VDM, true) && VDM_TYPE(vh) == 0 &&
+	    (vh & 0x1f) == VDM_ATTENTION) {
+		if ((vh >> 16) == SVID_DP && msg_ndo(m) > 1 &&
+		    (msg_do(m, 1) & DP_STATUS_HPD))
+			uc->hpd_pending = true;
+		return;
+	}
+	uc120_handle_msg(uc, m);
+}
+
+/*
+ * Structured VDM with ACK. BUSY is retried after 100 ms like tyc does, a
+ * VDM nobody answers is sent again up to VDM_TRIES times, NAK fails.
+ */
 static int uc120_vdm(struct uc120 *uc, u32 vh, const u32 *vdo, int n,
 		     struct pd_msg *ack)
 {
 	u32 d[7];
-	int i, rc, busy;
+	int i, rc, busy = 0, tries = 0;
 
-	for (busy = 0; busy < 10; busy++) {
+	for (;;) {
 		d[0] = vh;
 		for (i = 0; i < n; i++)
 			d[1 + i] = vdo[i];
@@ -444,27 +483,37 @@ static int uc120_vdm(struct uc120 *uc, u32 vh, const u32 *vdo, int n,
 			return -EIO;
 		for (;;) {
 			rc = uc120_recv(uc, ack, 200);
-			if (rc <= 0) {
-				dev_info(uc->dev, "no answer to VDM %d\n",
-					 vh & 0x1f);
-				return rc ? rc : -ETIMEDOUT;
-			}
-			if (msg_is(ack, PD_DATA_VDM, true) &&
-			    (msg_do(ack, 0) & 0x1f) == (vh & 0x1f))
+			if (rc <= 0)
 				break;
-			dev_dbg(uc->dev, "skipped message %04x\n",
-				msg_hdr(ack));
+			/* the answer: same command, ACK/NAK/BUSY */
+			if (msg_is(ack, PD_DATA_VDM, true) &&
+			    (msg_do(ack, 0) & 0x1f) == (vh & 0x1f) &&
+			    VDM_TYPE(msg_do(ack, 0)))
+				break;
+			uc120_answer(uc, ack);
 		}
-		switch ((msg_do(ack, 0) >> 6) & 3) {
+		if (rc < 0)
+			return rc;
+		if (!rc) {
+			if (++tries < VDM_TRIES) {
+				dev_info(uc->dev, "no answer to VDM %d, again\n",
+					 vh & 0x1f);
+				continue;
+			}
+			dev_info(uc->dev, "no answer to VDM %d\n", vh & 0x1f);
+			return -ETIMEDOUT;
+		}
+		switch (VDM_TYPE(msg_do(ack, 0))) {
 		case 1:
 			return 0;
 		case 2:
 			dev_info(uc->dev, "VDM %d NAK\n", vh & 0x1f);
 			return -EOPNOTSUPP;
 		}
+		if (++busy >= 10)
+			return -EBUSY;
 		msleep(100);
 	}
-	return -EBUSY;
 }
 
 static int uc120_dp_configure(struct uc120 *uc)
@@ -485,6 +534,7 @@ static int uc120_dp_alt_mode(struct uc120 *uc)
 	int i, nd, b0, b12, rc;
 	bool found = false;
 
+	uc->hpd_pending = false;
 	rc = uc120_vdm(uc, VDM_HDR(VDM_DISC_IDENT, 0, SVID_PD), NULL, 0, &m);
 	if (rc)
 		return rc;
@@ -533,11 +583,12 @@ static int uc120_dp_alt_mode(struct uc120 *uc)
 		return rc;
 	if (msg_ndo(&m) > 1 && (msg_do(&m, 1) & (BIT(5) | BIT(6))))
 		return -EOPNOTSUPP;	/* USB or exit requested */
+	uc->dp_status = msg_ndo(&m) > 1 ? msg_do(&m, 1) : 0;
 	/* configure even with HPD low, the sink sends Attention later */
 	rc = uc120_dp_configure(uc);
 	if (rc)
 		return rc;
-	if (msg_ndo(&m) > 1 && (msg_do(&m, 1) & BIT(7)))
+	if ((uc->dp_status & DP_STATUS_HPD) || uc->hpd_pending)
 		uc120_hpd(uc, true);
 	dev_info(uc->dev, "DisplayPort mode, pin %c, partner %08x mode %08x\n",
 		 uc->pin == 0x10 ? 'E' : uc->pin == 0x08 ? 'D' :
@@ -623,6 +674,8 @@ static void uc120_detach(struct uc120 *uc)
 	uc->qh = uc->qt = 0;
 	uc->pin = 0;
 	uc->partner_id = 0;
+	uc->dp_status = 0;
+	uc->hpd_pending = false;
 	uc->hard_resets = 0;
 	dev_info(uc->dev, "detached\n");
 }
@@ -651,24 +704,33 @@ static void uc120_negotiate(struct uc120 *uc)
 			dev_info(uc->dev, "no PD contract (%d), USB only\n", rc);
 		return;
 	}
-	if (dp_alt_mode && uc->cable) {
+	/*
+	 * Discover the partner modes whether or not the FPGA saw Ra, as tyc
+	 * does: some docks show Ra in one plug orientation only, and without
+	 * Enter Mode they fall back to a USB Billboard device.
+	 */
+	if (dp_alt_mode) {
 		rc = uc120_dp_alt_mode(uc);
 		if (rc && rc != -ENODEV)
-			dev_info(uc->dev, "no DisplayPort mode (%d)\n", rc);
+			dev_info(uc->dev, "no DisplayPort mode (%d), partner %08x\n",
+				 rc, uc->partner_id);
 	}
 }
 
 static void uc120_attach_source(struct uc120 *uc, bool cable)
 {
 	dev_info(uc->dev, "sink attached on CC%d%s\n", uc->orient,
-		 cable ? ", VCONN requested" : "");
+		 cable ? ", Ra" : "");
 	uc->state = ST_SOURCE;
 	uc->cable = cable;
-	/* tyc InitializeDfpRole: mux USB, VCONN, 100 ms, VBUS, 100 ms */
+	/*
+	 * tyc InitializeDfpRole: mux USB, VCONN, 100 ms, VBUS, 100 ms. tyc
+	 * turns VCONN on for a sink with and without Ra alike: adapters that
+	 * need it do not always show Ra.
+	 */
 	uc120_set_ctrl(uc, 0, CTRL_UNATTACHED);
 	uc120_mux(uc, MUX_USB);
-	if (cable)
-		uc120_set_vconn(uc, true);
+	uc120_set_vconn(uc, true);
 	msleep(100);
 	uc120_set_vbus(uc, true);
 	msleep(100);
@@ -708,13 +770,30 @@ static void uc120_handle_msg(struct uc120 *uc, struct pd_msg *m)
 		uc120_send(uc, PD_CTRL_ACCEPT, NULL, 0);
 		msleep(30);
 		uc120_send(uc, PD_CTRL_PS_RDY, NULL, 0);
+	} else if (msg_is(m, PD_CTRL_DR_SWAP, false) ||
+		   msg_is(m, PD_CTRL_PR_SWAP, false) ||
+		   msg_is(m, PD_CTRL_VCONN_SWAP, false) ||
+		   msg_is(m, PD_CTRL_GOTOMIN, false)) {
+		/* we stay DFP, source and VCONN source */
+		uc120_send(uc, PD_CTRL_REJECT, NULL, 0);
+	} else if (msg_is(m, PD_DATA_VDM, true) &&
+		   (msg_do(m, 0) & BIT(15)) && !VDM_TYPE(msg_do(m, 0)) &&
+		   (msg_do(m, 0) & 0x1f) != VDM_ATTENTION) {
+		/* structured VDM request from the partner: nothing to offer */
+		pdo = (msg_do(m, 0) & ~(3 << 6)) | 2 << 6;
+		uc120_send(uc, PD_DATA_VDM, &pdo, 1);
 	} else if (msg_is(m, PD_DATA_VDM, true) &&
 		   (msg_do(m, 0) & 0x1f) == VDM_ATTENTION &&
 		   (msg_do(m, 0) >> 16) == SVID_DP && msg_ndo(m) > 1) {
 		u32 st = msg_do(m, 1);
-		bool hpd = st & BIT(7);
+		bool hpd = st & DP_STATUS_HPD;
 
-		dev_info(uc->dev, "DP attention %08x\n", st);
+		/* IRQ_HPD alone: the bridge sees the link change over AUX */
+		if ((st ^ uc->dp_status) & ~DP_STATUS_IRQ_HPD)
+			dev_info(uc->dev, "DP attention %08x\n", st);
+		else
+			dev_dbg(uc->dev, "DP attention %08x\n", st);
+		uc->dp_status = st;
 		if (st & (BIT(5) | BIT(6)))
 			uc120_hpd(uc, false);
 		else if (hpd && !uc->hpd) {
