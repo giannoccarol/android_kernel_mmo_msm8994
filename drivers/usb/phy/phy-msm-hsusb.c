@@ -135,6 +135,7 @@ struct msm_hsphy {
 	void __iomem		*tcsr;
 	void __iomem		*csr;
 	int			hsphy_init_seq;
+	int			hsphy_init_seq_host;	/* 0: as device */
 	bool			set_pllbtune;
 	u32			core_ver;
 
@@ -322,6 +323,27 @@ static int msm_hsphy_reset(struct usb_phy *uphy)
 	return 0;
 }
 
+/*
+ * Write the HSPHY parameters (VBUS valid and disconnect thresholds, DC level,
+ * pre-emphasis, rise/fall time) to the QSCRATCH override register. A board
+ * can give host mode its own values with qcom,hsphy-init-host (the mmo
+ * boards use the msm8994 default there, their device values are tuned for
+ * the link to a PC).
+ */
+static void msm_hsphy_write_params(struct msm_hsphy *phy, bool host)
+{
+	int seq;
+
+	if (override_phy_init)
+		phy->hsphy_init_seq = override_phy_init;
+	seq = phy->hsphy_init_seq;
+	if (host && phy->hsphy_init_seq_host && !override_phy_init)
+		seq = phy->hsphy_init_seq_host;
+	if (seq)
+		msm_usb_write_readback(phy->base, PARAMETER_OVERRIDE_X_REG(0),
+					0x03FFFFFF, seq & 0x03FFFFFF);
+}
+
 static int msm_hsphy_init(struct usb_phy *uphy)
 {
 	struct msm_hsphy *phy = container_of(uphy, struct msm_hsphy, phy);
@@ -370,12 +392,7 @@ static int msm_hsphy_init(struct usb_phy *uphy)
 	 * VBUS valid threshold, disconnect valid threshold, DC voltage level,
 	 * preempasis and rise/fall time.
 	 */
-	if (override_phy_init)
-		phy->hsphy_init_seq = override_phy_init;
-	if (phy->hsphy_init_seq)
-		msm_usb_write_readback(phy->base,
-					PARAMETER_OVERRIDE_X_REG(0), 0x03FFFFFF,
-					phy->hsphy_init_seq & 0x03FFFFFF);
+	msm_hsphy_write_params(phy, uphy->flags & PHY_HOST_MODE);
 
 	return 0;
 }
@@ -616,13 +633,7 @@ static int msm_hsphy_set_suspend(struct usb_phy *uphy, int suspend)
 		 * parameters like VBUS valid threshold, disconnect valid
 		 * threshold, DC voltage level,preempasis and rise/fall time
 		 */
-		if (override_phy_init)
-			phy->hsphy_init_seq = override_phy_init;
-		if (phy->hsphy_init_seq)
-			msm_usb_write_readback(phy->base,
-					PARAMETER_OVERRIDE_X_REG(0),
-					0x03FFFFFF,
-					phy->hsphy_init_seq & 0x03FFFFFF);
+		msm_hsphy_write_params(phy, host);
 	}
 
 	phy->suspended = !!suspend; /* double-NOT coerces to bool value */
@@ -638,6 +649,7 @@ static int msm_hsphy_notify_connect(struct usb_phy *uphy,
 	phy->cable_connected = true;
 
 	if (uphy->flags & PHY_HOST_MODE) {
+		msm_hsphy_write_params(phy, true);
 		if (phy->core_ver == MSM_CORE_VER_160 ||
 			phy->core_ver == MSM_CORE_VER_161) {
 			/* Some snps usb2 picophy revisions require 3.15 V to
@@ -695,6 +707,7 @@ static int msm_hsphy_notify_disconnect(struct usb_phy *uphy,
 	phy->cable_connected = false;
 
 	if (uphy->flags & PHY_HOST_MODE) {
+		msm_hsphy_write_params(phy, false);
 		if (phy->core_ver == MSM_CORE_VER_160 ||
 			phy->core_ver == MSM_CORE_VER_161) {
 			rc = regulator_set_voltage(phy->vdda33,
@@ -864,6 +877,9 @@ static int msm_hsphy_probe(struct platform_device *pdev)
 		dev_dbg(dev, "unable to read hsphy init seq\n");
 	else if (!phy->hsphy_init_seq)
 		dev_warn(dev, "hsphy init seq cannot be 0. Using POR value\n");
+
+	of_property_read_u32(dev->of_node, "qcom,hsphy-init-host",
+				&phy->hsphy_init_seq_host);
 
 	if (of_property_read_u32(dev->of_node, "qcom,num-ports",
 					&phy->num_ports))

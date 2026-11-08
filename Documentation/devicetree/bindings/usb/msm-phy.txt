@@ -32,6 +32,8 @@ Optional properties:
 		bits 6-12  PARAMETER_OVERRIDE_B
 		bits 13-19 PARAMETER_OVERRIDE_C
 		bits 20-25 PARAMETER_OVERRIDE_D
+ - qcom,hsphy-init-host: Optional. Same layout as qcom,hsphy-init, used instead
+   of it while the controller is in host mode.
  - qcom,ext-vbus-id: If present, indicates that the PHY does not handle VBUS and ID changes.
  - qcom,vbus-valid-override: If present, indicates VBUS pin is not connected to
    the USB PHY and the controller must rely on external VBUS notification in
