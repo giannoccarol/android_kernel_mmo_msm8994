@@ -1021,6 +1021,16 @@ int sp_write_reg(uint8_t slave_addr, uint8_t offset, uint8_t value)
 	return ret;
 }
 
+/*
+ * The reference clock (cityman: PM8994 DIV_CLK3) is shared with the UC120
+ * Type-C PHY, which keeps it on for its FPGA. The state machine powers the
+ * chip down more than once in a row (cable removed while it was already
+ * recovering), so take and drop our reference only on a real change:
+ * an extra clk_disable_unprepare() released the UC120 one, stopped the FPGA
+ * clock and left the UC120 thread stuck in spi_sync().
+ */
+static bool anx7816_xtal_on;
+
 void sp_tx_hardware_poweron(void)
 {
 #ifdef CONFIG_OF
@@ -1028,8 +1038,13 @@ void sp_tx_hardware_poweron(void)
 #else
 	struct anx7816_platform_data *pdata = anx7816_client->dev.platform_data;
 #endif
-	if (pdata->xtal && clk_prepare_enable(pdata->xtal))
-		pr_err("%s %s: reference clock enable failed\n", LOG_TAG, __func__);
+	if (pdata->xtal && !anx7816_xtal_on) {
+		if (clk_prepare_enable(pdata->xtal))
+			pr_err("%s %s: reference clock enable failed\n",
+			       LOG_TAG, __func__);
+		else
+			anx7816_xtal_on = true;
+	}
 	msleep(1);
 	gpio_set_value(pdata->gpio_reset, 0);
 	msleep(1);
@@ -1074,8 +1089,10 @@ void sp_tx_hardware_powerdown(void)
 	pdata->check_slimport_connection = false;
 	gpio_set_value(pdata->gpio_p_dwn, 1);
 	msleep(1);
-	if (pdata->xtal)
+	if (pdata->xtal && anx7816_xtal_on) {
 		clk_disable_unprepare(pdata->xtal);
+		anx7816_xtal_on = false;
+	}
 
 	pr_err("%s %s: anx7816 power down\n", LOG_TAG, __func__);
 }
