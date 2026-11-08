@@ -1734,6 +1734,23 @@ int hdmi_edid_read(void *input)
 
 	hdmi_reset_resv_timing_info();
 
+#ifdef CONFIG_SLIMPORT_ANX7816
+	/*
+	 * Behind the SlimPort bridge the one-lane DisplayPort link limits the
+	 * pixel clock (lower after a link rate fallback): keep only the EDID
+	 * modes it carries, through the downstream limit MHL uses.
+	 */
+	if (slimport_is_connected() && edid_ctrl->init_data.ds_data) {
+		u32 khz = slimport_max_pclk_khz();
+
+		edid_ctrl->init_data.ds_data->ds_max_clk = khz;
+		edid_ctrl->init_data.ds_data->ds_registered = !!khz;
+		if (khz)
+			DEV_INFO("%s: DisplayPort link limit %u kHz\n",
+				__func__, khz);
+	}
+#endif
+
 	status = hdmi_edid_read_block(edid_ctrl, 0, edid_buf);
 	if (status || !hdmi_edid_check_header(edid_buf)) {
 		if (!status)
