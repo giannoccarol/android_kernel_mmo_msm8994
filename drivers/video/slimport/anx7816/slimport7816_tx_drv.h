@@ -330,6 +330,7 @@ unchar slimport_hdcp_cap_check(void);
 unchar sp_tx_cur_cable_type(void);
 void sp_tx_initialization(void);
 unchar sp_tx_cur_bw(void);
+unsigned long sp_tx_max_pclk_khz(void);
 void sp_tx_set_bw(unchar bw);
 unchar sp_rx_cur_bw(void);
 void sp_tx_variable_init(void);

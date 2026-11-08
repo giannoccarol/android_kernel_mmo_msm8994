@@ -1113,6 +1113,16 @@ int slimport_read_edid_block(int block, uint8_t *edid_buf)
 }
 EXPORT_SYMBOL(slimport_read_edid_block);
 
+/*
+ * Highest pixel clock (kHz) the DisplayPort link to the sink carries, 0 for
+ * no limit: the HDMI side drops the EDID modes above it.
+ */
+unsigned long slimport_max_pclk_khz(void)
+{
+	return sp_tx_max_pclk_khz();
+}
+EXPORT_SYMBOL(slimport_max_pclk_khz);
+
 static void anx7816_free_gpio(struct anx7816_data *anx7816)
 {
 	struct anx7816_platform_data *pdata = anx7816->pdata;

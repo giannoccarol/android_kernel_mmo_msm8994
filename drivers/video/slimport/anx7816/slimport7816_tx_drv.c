@@ -43,6 +43,8 @@ static unsigned char g_hdmi_dvi_status;
 
 static unsigned char g_need_clean_status;
 
+static void sp_tx_lt_reset_cap(void);
+
 /* HDCP switch for external block*/
 /* external_block_en = 1: enable, 0: disable*/
 extern int external_block_en;
@@ -850,6 +852,7 @@ void slimport_waitting_cable_plug_process(void)
 #ifdef CONFIG_SLIMPORT_DYNAMIC_HPD
 		slimport_set_hdmi_hpd(1);
 #endif
+		sp_tx_lt_reset_cap();	/* new sink, try the full rate */
 		hardware_power_ctl(1);
 		goto_next_system_state();
 	} else {
@@ -1505,13 +1508,14 @@ void slimport_edid_process(void)
 		g_hdcp_cap_bak = slimport_hdcp_cap_check();
 	hdmi_rx_hdcp_cap(g_hdcp_cap_bak);
 	#endif
-	hdmi_rx_set_hpd(1);
-	pr_info("%s %s : hdmi_rx_set_hpd 1 !\n", LOG_TAG, __func__);
-	hdmi_rx_set_termination(1);
-
+	/* before HPD: the SoC reads the EDID and the pixel clock limit */
 	sp_tx_get_rx_bw(&temp_value);
 	pr_info("%s %s : get rx bandwidth info = [%x] \n", LOG_TAG, __func__, (uint)temp_value);
 	sp_rx_bandwidth = temp_value;
+
+	hdmi_rx_set_hpd(1);
+	pr_info("%s %s : hdmi_rx_set_hpd 1 !\n", LOG_TAG, __func__);
+	hdmi_rx_set_termination(1);
 	temp_value1 = parse_edid_to_get_bandwidth();
 	if (temp_value <= temp_value1)
 		temp_value1 = temp_value;
@@ -1527,6 +1531,63 @@ void slimport_edid_process(void)
 #endif
 /******************End EDID process********************/
 /******************start Link training process********************/
+
+/*
+ * Link rate fallback. Through the USB-C mux and some docks the link does
+ * not train at 5.4 Gbps: the hardware may report the training as done
+ * while the sink lane status shows only clock recovery, or the symbol
+ * error counter saturates. After two failures at a rate, lower it as a
+ * DisplayPort source should, and keep it as the ceiling for this sink:
+ * sp_tx_bw_lc_sel() no longer raises it again for the input video, and
+ * the HDMI side is told the highest pixel clock the link carries (HPD
+ * pulse, the SoC reads the EDID again and drops the modes that no longer
+ * fit). The ceiling is reset when a new sink is plugged.
+ */
+static unchar lt_fail_count;
+static unchar sp_link_bw_cap = LINK_6P75G;
+
+static void sp_tx_lt_reset_cap(void)
+{
+	lt_fail_count = 0;
+	sp_link_bw_cap = LINK_6P75G;
+}
+
+static void sp_tx_lt_failed(void)
+{
+	unchar c;
+
+	if (++lt_fail_count < 2 || g_changed_bandwidth <= LINK_1P62G)
+		return;
+	lt_fail_count = 0;
+	g_changed_bandwidth = (g_changed_bandwidth > LINK_2P7G) ?
+			LINK_2P7G : LINK_1P62G;
+	sp_link_bw_cap = g_changed_bandwidth;
+	pr_info("%s %s : lowering link rate to %.2x, max pixel clock %lu kHz\n",
+		LOG_TAG, __func__, (uint)g_changed_bandwidth,
+		sp_tx_max_pclk_khz());
+
+	sp_read_reg(TX_P2, SP_TX_VID_CTRL3_REG, &c);
+	if (c & HPD_OUT) {
+		hdmi_rx_set_hpd(0);
+		msleep(300);
+		hdmi_rx_set_hpd(1);
+	}
+}
+
+/* highest pixel clock the current link ceiling carries, 0 = no limit */
+unsigned long sp_tx_max_pclk_khz(void)
+{
+	unchar bw = min(sp_rx_bandwidth, sp_link_bw_cap);
+
+	/* one lane, 24 bpp, the same steps as sp_tx_bw_lc_sel() */
+	if (bw >= LINK_6P75G)
+		return 0;
+	if (bw >= LINK_5P4G)
+		return 180000;
+	if (bw >= LINK_2P7G)
+		return 89000;
+	return 53000;
+}
 
 static void sp_tx_lvttl_bit_mapping(void)
 {
@@ -1642,6 +1703,13 @@ static unchar sp_tx_bw_lc_sel(ulong pclk)
 		 c1 = LINK_6P75G;
 		 if(pixel_clk > 2240)
 			down_sample_en = 1;
+	}
+
+	/* the link failed above the ceiling: wait for a smaller HDMI mode */
+	if (c1 > sp_link_bw_cap) {
+		pr_info("%s %s : video needs %.2x, link limited to %.2x\n",
+			LOG_TAG, __func__, (uint)c1, (uint)sp_link_bw_cap);
+		c1 = sp_link_bw_cap;
 	}
 
 	if(sp_tx_get_link_bw() != c1){
@@ -1793,11 +1861,18 @@ void slimport_link_training(void)
 			}
 			sp_write_reg(TX_P0, SP_TX_LT_SET_REG, 0x0); //add by leo 20150728
 
+			/* down-spreading only if the sink supports it (DPCD 0x003 bit 0) */
+			sp_tx_aux_dpcdread_bytes(0x00, 0x00, DPCD_MAX_DOWNSPREAD, 1, &c);
 			if (lge_get_boot_mode() != LGE_BOOT_MODE_QEM_56K) {
 				//power on main link before link training
-				pr_err("%s: LGE_BOOT_MODE_QEM_56K - 4000PPM\n", __func__);
 				sp_write_reg_and(TX_P0, SP_TX_ANALOG_PD_REG, ~CH0_PD);
-				sp_tx_config_ssc(SSC_DEP_4000PPM);
+				if (c & 0x01) {
+					sp_tx_config_ssc(SSC_DEP_4000PPM);
+				} else {
+					sp_tx_spread_enable(0);
+					pr_info("%s %s : SSC off, sink has no down-spreading\n",
+						LOG_TAG, __func__);
+				}
 			} else {
 				pr_err("%s: LGE_BOOT_MODE_QEM_56K - 5000PPM\n", __func__);
 				sp_tx_config_ssc(SSC_DEP_5000PPM);
@@ -1859,7 +1934,9 @@ void slimport_link_training(void)
 						if(sp_tx_link_err_check() > 200){
 							pr_info("%s %s :Need to reset Serdes FIFO.\n", LOG_TAG, __func__);
 							sp_tx_LT_state = LT_ERROR;
+							sp_tx_lt_failed();
 						}else {
+							lt_fail_count = 0;
 							goto_next_system_state();
 						}
 					}else {
@@ -1874,6 +1951,7 @@ void slimport_link_training(void)
 			}else {
 				pr_info("%s %s : LANE0 Status error: %.2x\n", LOG_TAG, __func__, (uint)(temp_value&0x07));
 				sp_tx_LT_state = LT_ERROR;
+				sp_tx_lt_failed();
 			}
 			break;
 		default:
@@ -3263,8 +3341,6 @@ static void sp_tx_polling_err_int_handler(void)
 }
 static void sp_tx_lt_done_int_handler(void)
 {
-	/* consecutive link training failures at the current link rate */
-	static unchar lt_fail_count;
 	unchar c;
 	if (sp_tx_LT_state == LT_WAITTING_FINISH
 		&& sp_tx_system_state == STATE_LINK_TRAINING) {
@@ -3273,22 +3349,11 @@ static void sp_tx_lt_done_int_handler(void)
 			c = (c & 0x70) >> 4;
 			pr_info("%s %s : LT failed in interrupt, ERR code = %.2x\n", LOG_TAG, __func__, (uint) c);
 			sp_tx_LT_state = LT_ERROR;
-			/*
-			 * Fall back to a lower link rate after two failures, as a
-			 * DisplayPort source should: through the USB-C mux the
-			 * link does not always train at 5.4 Gbps.
-			 */
-			if (++lt_fail_count >= 2 && g_changed_bandwidth > LINK_1P62G) {
-				lt_fail_count = 0;
-				g_changed_bandwidth = (g_changed_bandwidth > LINK_2P7G) ?
-						LINK_2P7G : LINK_1P62G;
-				pr_info("%s %s : lowering link rate to %.2x\n", LOG_TAG,
-					__func__, (uint)g_changed_bandwidth);
-			}
+			sp_tx_lt_failed();
 		} else {
+			/* the sink lane status decides in LT_FINISH */
 			pr_info("%s %s : lt_done: LT Finish \n", LOG_TAG, __func__);
 			sp_tx_LT_state = LT_FINISH;
-			lt_fail_count = 0;
 		}
 	}
 
