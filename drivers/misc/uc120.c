@@ -116,6 +116,10 @@ static bool pr_swap = true;
 module_param(pr_swap, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(pr_swap, "let a powered dock that attached as sink charge us");
 
+static bool ask_pr_swap = true;
+module_param(ask_pr_swap, bool, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(ask_pr_swap, "ask an externally powered sink to power us");
+
 struct pd_msg {
 	int len;
 	u8 b[32];
@@ -170,6 +174,7 @@ struct uc120 {
 	bool swapping;			/* power role swap: Type-C events are noise */
 	bool discovering;		/* DisplayPort discovery running */
 	unsigned long pr_swap_failed;	/* jiffies of the last failed PR_Swap */
+	unsigned long vbus_grace;	/* after PR_Swap: the dock's VBUS rising */
 	bool hpd_pending;		/* Attention with HPD high during discovery */
 	u32 dp_status;			/* last DP status from an Attention */
 	int pin;
@@ -479,6 +484,7 @@ static bool msg_is(const struct pd_msg *m, int type, bool data)
 }
 
 static void uc120_handle_msg(struct uc120 *uc, struct pd_msg *m);
+static void uc120_ask_pr_swap(struct uc120 *uc);
 
 /*
  * A message from the partner while we wait for a VDM answer. Some docks
@@ -709,6 +715,9 @@ static void uc120_vbus_in(struct uc120 *uc)
 	if (present) {
 		uc120_set_role(uc, ROLE_VBUS_IN, 0);
 	} else {
+		/* power role swap: the charger has not seen the dock's VBUS yet */
+		if (uc->vbus_grace && time_before(jiffies, uc->vbus_grace))
+			return;
 		uc120_set_role(uc, 0, ROLE_VBUS_IN);
 		if (uc->state != ST_DETACHED && !uc->src)
 			uc->tc_event = TC_DETACH;
@@ -730,6 +739,7 @@ static void uc120_detach(struct uc120 *uc)
 	uc->sink_pd = false;
 	uc->sink_ma = 0;
 	uc->src_pdo = 0;
+	uc->vbus_grace = 0;
 	uc->qh = uc->qt = 0;
 	uc->pin = 0;
 	uc->partner_id = 0;
@@ -774,6 +784,7 @@ static void uc120_negotiate(struct uc120 *uc)
 			dev_info(uc->dev, "no DisplayPort mode (%d), partner %08x\n",
 				 rc, uc->partner_id);
 	}
+	uc120_ask_pr_swap(uc);
 }
 
 static void uc120_attach_source(struct uc120 *uc, bool cable)
@@ -1016,14 +1027,14 @@ static bool uc120_ufp_vdm(struct uc120 *uc, struct pd_msg *m)
  * Rd, PS_RDY, then the dock's PS_RDY and its Source_Capabilities. tyc
  * accepts it always; the data role (DFP), VCONN and DisplayPort stay.
  */
-static void uc120_pr_swap_to_sink(struct uc120 *uc)
+static void uc120_pr_swap_to_sink(struct uc120 *uc, bool asked)
 {
 	struct pd_msg m;
 	int rc = -EIO;
 
 	dev_info(uc->dev, "power role swap: the partner will power VBUS\n");
 	uc->swapping = true;
-	if (uc120_send(uc, PD_CTRL_ACCEPT, NULL, 0))
+	if (!asked && uc120_send(uc, PD_CTRL_ACCEPT, NULL, 0))
 		goto out;
 	msleep(30);			/* tSrcTransition */
 	uc120_set_host(uc, uc->dfp ? 2 : 0);	/* boost off, xHCI stays */
@@ -1041,6 +1052,7 @@ static void uc120_pr_swap_to_sink(struct uc120 *uc)
 	} while (rc > 0 && !msg_is(&m, PD_CTRL_PS_RDY, false));
 	if (rc > 0) {
 		dev_info(uc->dev, "power role swap done, now sink\n");
+		uc->vbus_grace = (jiffies + msecs_to_jiffies(1500)) | 1;
 		uc120_host_charge(uc);
 		goto out;
 	}
@@ -1059,6 +1071,52 @@ out:
 		uc->tc_event = 0;
 	}
 	uc->swapping = false;
+}
+
+/*
+ * A powered dock that attached as sink (ThinkPad USB-C Dock Gen 2: Rd, asks
+ * us for 100 mA) never asks for the swap itself. If its source capabilities
+ * say it is externally powered, ask for PR_Swap so that it charges us.
+ */
+static void uc120_ask_pr_swap(struct uc120 *uc)
+{
+	struct pd_msg m;
+	u32 pdo;
+	int rc;
+
+	if (!pr_swap || !ask_pr_swap || !uc->src || uc->state < ST_PD_READY ||
+	    (uc->pr_swap_failed &&
+	     time_before(jiffies, uc->pr_swap_failed + 30 * HZ)))
+		return;
+	if (uc120_send(uc, PD_CTRL_GET_SRC_CAP, NULL, 0))
+		return;
+	for (;;) {
+		rc = uc120_recv(uc, &m, 100);
+		if (rc <= 0 || !uc->src)
+			return;
+		if (msg_is(&m, PD_DATA_SRC_CAP, true))
+			break;
+		if (msg_is(&m, PD_CTRL_REJECT, false) ||
+		    (msg_hdr(&m) & 0xf) == 16) {	/* Not_Supported (PD 3) */
+			dev_info(uc->dev, "partner has no source capabilities\n");
+			return;
+		}
+		uc120_answer(uc, &m);
+	}
+	pdo = msg_do(&m, 0);
+	dev_info(uc->dev, "partner can source %08x%s\n", pdo,
+		 pdo & BIT(27) ? ", externally powered" : "");
+	if (!(pdo & BIT(27)))
+		return;
+	if (uc120_send(uc, PD_CTRL_PR_SWAP, NULL, 0))
+		return;
+	rc = uc120_wait_ctrl(uc, &m, 100);
+	if (rc <= 0 || !msg_is(&m, PD_CTRL_ACCEPT, false)) {
+		dev_info(uc->dev, "PR_Swap refused (%d, %04x)\n", rc,
+			 rc > 0 ? msg_hdr(&m) : 0);
+		return;
+	}
+	uc120_pr_swap_to_sink(uc, true);
 }
 
 /* messages while a contract is up */
@@ -1093,7 +1151,7 @@ static void uc120_handle_msg(struct uc120 *uc, struct pd_msg *m)
 		   (!uc->pr_swap_failed ||
 		    time_after(jiffies, uc->pr_swap_failed + 30 * HZ))) {
 		/* after a failed swap, 30 s of Reject: no detach loop */
-		uc120_pr_swap_to_sink(uc);
+		uc120_pr_swap_to_sink(uc, false);
 	} else if (msg_is(m, PD_CTRL_DR_SWAP, false) ||
 		   msg_is(m, PD_CTRL_PR_SWAP, false) ||
 		   msg_is(m, PD_CTRL_VCONN_SWAP, false) ||
