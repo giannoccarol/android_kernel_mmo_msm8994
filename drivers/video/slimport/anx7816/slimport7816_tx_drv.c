@@ -1543,19 +1543,28 @@ void slimport_edid_process(void)
  * pulse, the SoC reads the EDID again and drops the modes that no longer
  * fit). The ceiling is reset when a new sink is plugged.
  *
- * A dock that is still starting fails at every rate for a while (the
- * HD-500 right after DR_Swap), and some sinks only train at the top rate:
- * when the lowest rate fails too, start again from the sink maximum
- * instead of staying at 1.62 Gbps for good.
+ * A dock that is in a bad state fails at every rate (the HD-500 now and
+ * then after DR_Swap) and only a replug brings it back; some sinks only
+ * train at the top rate. When the lowest rate fails too, go back to the
+ * sink maximum once and ask the Type-C side for a hard reset, the same as
+ * a replug. After that keep trying quietly: every rate change pulses HPD,
+ * and a loop of HDMI hotplugs every two seconds stalls Android.
  */
 #define LT_TRIES	4
 static unchar lt_fail_count;
+static bool lt_gave_up;
 static unchar sp_link_bw_cap = LINK_6P75G;
 
 static void sp_tx_lt_reset_cap(void)
 {
 	lt_fail_count = 0;
+	lt_gave_up = false;
 	sp_link_bw_cap = LINK_6P75G;
+}
+
+/* uc120: re-attach the Type-C partner (hard reset), at most once a minute */
+void __weak uc120_dp_link_failed(void)
+{
 }
 
 static void sp_tx_lt_failed(void)
@@ -1565,12 +1574,16 @@ static void sp_tx_lt_failed(void)
 	if (++lt_fail_count < LT_TRIES)
 		return;
 	lt_fail_count = 0;
+	if (lt_gave_up)
+		return;
 	if (g_changed_bandwidth <= LINK_1P62G) {
+		lt_gave_up = true;
 		sp_link_bw_cap = LINK_6P75G;
 		g_changed_bandwidth = sp_rx_bandwidth ? sp_rx_bandwidth :
 				      LINK_5P4G;
-		pr_info("%s %s : no rate trains, back to %.2x\n", LOG_TAG,
-			__func__, (uint)g_changed_bandwidth);
+		pr_info("%s %s : no rate trains, back to %.2x, Type-C reset\n",
+			LOG_TAG, __func__, (uint)g_changed_bandwidth);
+		uc120_dp_link_failed();
 	} else {
 		g_changed_bandwidth = (g_changed_bandwidth > LINK_2P7G) ?
 				LINK_2P7G : LINK_1P62G;
@@ -1798,11 +1811,16 @@ void sp_tx_enhancemode_set(void)
 uint sp_tx_link_err_check(void)
 {
 	uint errl = 0, errh = 0;
-	unchar bytebuf[2];
+	unchar bytebuf[2] = { 0, 0 };
 
 	sp_tx_aux_dpcdread_bytes(0x00, 0x02, 0x10, 2, bytebuf);
 	mdelay(5);
-	sp_tx_aux_dpcdread_bytes(0x00, 0x02, 0x10, 2, bytebuf);
+	/* the buffer was used unread on an AUX error: say so, count it bad */
+	if (sp_tx_aux_dpcdread_bytes(0x00, 0x02, 0x10, 2, bytebuf) != AUX_OK) {
+		pr_err("%s %s :  Err of Lane: AUX read failed\n", LOG_TAG,
+		       __func__);
+		return 0x7fff;
+	}
 	errh = bytebuf[1];
 
 	if (errh & 0x80) {

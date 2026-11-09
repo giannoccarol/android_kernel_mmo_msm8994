@@ -175,6 +175,8 @@ struct uc120 {
 	bool discovering;		/* DisplayPort discovery running */
 	unsigned long pr_swap_failed;	/* jiffies of the last failed PR_Swap */
 	unsigned long vbus_grace;	/* after PR_Swap: the dock's VBUS rising */
+	bool dp_reset_req;		/* bridge: no link at any rate */
+	unsigned long dp_reset_last;	/* jiffies of the last such hard reset */
 	bool hpd_pending;		/* Attention with HPD high during discovery */
 	u32 dp_status;			/* last DP status from an Attention */
 	int pin;
@@ -1272,6 +1274,40 @@ static int uc120_hw_init(struct uc120 *uc)
 	return 0;
 }
 
+static struct uc120 *uc120_dev;
+
+/* from the ANX7816 bridge: the DisplayPort link trains at no rate */
+void uc120_dp_link_failed(void)
+{
+	struct uc120 *uc = uc120_dev;
+
+	if (!uc)
+		return;
+	uc->dp_reset_req = true;
+	wake_up(&uc->wq);
+}
+
+/*
+ * A replug brings such a dock back (HD-500): do the same with a hard
+ * reset, at most once a minute so that a sink that never trains does not
+ * keep re-attaching.
+ */
+static void uc120_dp_reset(struct uc120 *uc)
+{
+	if (uc->state < ST_DP)
+		return;
+	if (uc->dp_reset_last &&
+	    time_before(jiffies, uc->dp_reset_last + 60 * HZ)) {
+		dev_info(uc->dev, "DisplayPort link down, no reset (one a minute)\n");
+		return;
+	}
+	uc->dp_reset_last = jiffies | 1;
+	dev_info(uc->dev, "DisplayPort link trains at no rate: hard reset\n");
+	uc120_hpd(uc, false);
+	uc120_hard_reset(uc);
+	uc->tc_event = 99;	/* our side of the hard reset */
+}
+
 static int uc120_thread(void *data)
 {
 	struct uc120 *uc = data;
@@ -1282,10 +1318,14 @@ static int uc120_thread(void *data)
 				   MAX_SCHEDULE_TIMEOUT;
 
 		wait_event_freezable_timeout(uc->wq, uc->irq_pending ||
-					     uc->psy_changed ||
+					     uc->psy_changed || uc->dp_reset_req ||
 					     kthread_should_stop(), t);
 		uc->irq_pending = false;
 		mutex_lock(&uc->lock);
+		if (uc->dp_reset_req) {
+			uc->dp_reset_req = false;
+			uc120_dp_reset(uc);
+		}
 		/* cheap: one property read, also covers missed notifications */
 		uc->psy_changed = false;
 		uc120_vbus_in(uc);
@@ -1496,6 +1536,7 @@ static int uc120_probe(struct spi_device *spi)
 		uc->psy.name = NULL;
 	}
 
+	uc120_dev = uc;
 	uc->thread = kthread_run(uc120_thread, uc, "uc120");
 	if (IS_ERR(uc->thread)) {
 		rc = PTR_ERR(uc->thread);
@@ -1519,6 +1560,7 @@ static int uc120_remove(struct spi_device *spi)
 {
 	struct uc120 *uc = spi_get_drvdata(spi);
 
+	uc120_dev = NULL;
 	kthread_stop(uc->thread);
 	mutex_lock(&uc->lock);
 	uc->tc_event = 0;

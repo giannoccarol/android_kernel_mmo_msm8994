@@ -65,6 +65,7 @@ void sp_tx_hardware_powerdown(void);
 int slimport_read_edid_block(int block, uint8_t *edid_buf);
 unsigned long slimport_max_pclk_khz(void);
 void slimport_typec_hpd(bool on);
+void uc120_dp_link_failed(void);
 unchar sp_get_link_bw(void);
 void sp_set_link_bw(unchar link_bw);
 
