@@ -729,6 +729,8 @@ void xtal_clk_sel(void)
 void sp_tx_initialization(void)
 {
 	sp_write_reg(TX_P0, AUX_CTRL2, 0x30);  /* xjh add set terminal reistor to 50ohm */
+	/* as hdmidpi.sys and the upstream driver: AUX double-diff output */
+	sp_write_reg_or(TX_P0, AUX_CTRL2, 0x08);
 
 	#ifndef HDCP_AUTO_EN
 	sp_write_reg_and(TX_P0, TX_HDCP_CTRL, (~AUTO_EN) & (~AUTO_START));

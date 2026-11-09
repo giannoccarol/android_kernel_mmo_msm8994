@@ -1526,9 +1526,16 @@ static int anx7816_i2c_probe(struct i2c_client *client,
 	pr_err("%s %s start\n", LOG_TAG, __func__);
 
 #ifdef SP_REGISTER_SET_TEST
+	/*
+	 * Swing and pre-emphasis table (TX_P1). REG2, REG12, REG16 and REG18
+	 * are the Analogix reference values that Windows (hdmidpi.sys) and the
+	 * upstream driver use; the LG values were 0x57, 0x02, 0x2f and 0x77.
+	 * With those the Microsoft HD-500 dock failed clock recovery on most
+	 * plugs. The ctrl_reg* files still set them, applied on the next plug.
+	 */
 	val_SP_TX_LT_CTRL_REG0 = 0x01;
 	val_SP_TX_LT_CTRL_REG1 = 0x03;
-	val_SP_TX_LT_CTRL_REG2 = 0x57;
+	val_SP_TX_LT_CTRL_REG2 = 0x07;
 	val_SP_TX_LT_CTRL_REG3 = 0x7f;
 	val_SP_TX_LT_CTRL_REG4 = 0x71;
 	val_SP_TX_LT_CTRL_REG5 = 0x6b;
@@ -1538,13 +1545,13 @@ static int anx7816_i2c_probe(struct i2c_client *client,
 	val_SP_TX_LT_CTRL_REG9 = 0x7f;
 	val_SP_TX_LT_CTRL_REG10 = 0x00;
 	val_SP_TX_LT_CTRL_REG11 = 0x00;
-	val_SP_TX_LT_CTRL_REG12 = 0x02;
+	val_SP_TX_LT_CTRL_REG12 = 0x00;
 	val_SP_TX_LT_CTRL_REG13 = 0x00;
 	val_SP_TX_LT_CTRL_REG14 = 0x0c;
 	val_SP_TX_LT_CTRL_REG15 = 0x42;
-	val_SP_TX_LT_CTRL_REG16 = 0x2f;
+	val_SP_TX_LT_CTRL_REG16 = 0x1e;
 	val_SP_TX_LT_CTRL_REG17 = 0x3e;
-	val_SP_TX_LT_CTRL_REG18 = 0x77;
+	val_SP_TX_LT_CTRL_REG18 = 0x72;
 	val_SP_TX_LT_CTRL_REG19 = 0x7e;
 #endif
 	if (!i2c_check_functionality(client->adapter,
