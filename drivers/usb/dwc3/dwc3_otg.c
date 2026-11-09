@@ -68,11 +68,19 @@ static int dwc3_otg_start_host(struct usb_otg *otg, int on)
 
 		dwc3_otg_notify_host_mode(otg, on);
 		usb_phy_notify_connect(dotg->dwc->usb2_phy, USB_SPEED_HIGH);
-		ret = regulator_enable(dotg->vbus_otg);
-		if (ret) {
-			dev_err(otg->phy->dev, "unable to enable vbus_otg\n");
-			dwc3_otg_notify_host_mode(otg, 0);
-			return ret;
+		/*
+		 * A powered dock that took the host role from us (USB PD
+		 * DR_Swap) keeps supplying VBUS: the boost must stay off.
+		 */
+		if (!ext_xceiv || !ext_xceiv->ext_vbus) {
+			ret = regulator_enable(dotg->vbus_otg);
+			if (ret) {
+				dev_err(otg->phy->dev,
+					"unable to enable vbus_otg\n");
+				dwc3_otg_notify_host_mode(otg, 0);
+				return ret;
+			}
+			dotg->vbus_otg_on = true;
 		}
 
 		dwc3_set_mode(dwc, DWC3_GCTL_PRTCAP_HOST);
@@ -90,7 +98,10 @@ static int dwc3_otg_start_host(struct usb_otg *otg, int on)
 			dev_err(otg->phy->dev,
 				"%s: failed to add XHCI pdev ret=%d\n",
 				__func__, ret);
-			regulator_disable(dotg->vbus_otg);
+			if (dotg->vbus_otg_on) {
+				regulator_disable(dotg->vbus_otg);
+				dotg->vbus_otg_on = false;
+			}
 			dwc3_otg_notify_host_mode(otg, 0);
 			return ret;
 		}
@@ -108,10 +119,14 @@ static int dwc3_otg_start_host(struct usb_otg *otg, int on)
 	} else {
 		dev_dbg(otg->phy->dev, "%s: turn off host\n", __func__);
 
-		ret = regulator_disable(dotg->vbus_otg);
-		if (ret) {
-			dev_err(otg->phy->dev, "unable to disable vbus_otg\n");
-			return ret;
+		if (dotg->vbus_otg_on) {
+			ret = regulator_disable(dotg->vbus_otg);
+			if (ret) {
+				dev_err(otg->phy->dev,
+					"unable to disable vbus_otg\n");
+				return ret;
+			}
+			dotg->vbus_otg_on = false;
 		}
 
 		dbg_event(0xFF, "StHost get", 0);
@@ -376,6 +391,38 @@ int dwc3_set_ext_xceiv(struct usb_otg *otg, struct dwc3_ext_xceiv *ext_xceiv)
 		ext_xceiv->notify_ext_events = dwc3_ext_event_notify;
 
 	return 0;
+}
+
+/**
+ * dwc3_otg_set_ext_vbus - VBUS from the partner (Type-C) or from our boost
+ * @otg: Pointer to the otg_transceiver structure.
+ * @ext: true when the partner supplies VBUS.
+ *
+ * Used by a Type-C port controller on a power role swap while the host
+ * runs: only the boost changes, the xHCI and its devices stay up.
+ */
+int dwc3_otg_set_ext_vbus(struct usb_otg *otg, bool ext)
+{
+	struct dwc3_otg *dotg = container_of(otg, struct dwc3_otg, otg);
+	int ret = 0;
+
+	if (dotg->ext_xceiv)
+		dotg->ext_xceiv->ext_vbus = ext;
+	if (!otg->host || !dotg->vbus_otg)
+		return 0;
+	if (ext && dotg->vbus_otg_on) {
+		ret = regulator_disable(dotg->vbus_otg);
+		if (!ret)
+			dotg->vbus_otg_on = false;
+	} else if (!ext && !dotg->vbus_otg_on) {
+		ret = regulator_enable(dotg->vbus_otg);
+		if (!ret)
+			dotg->vbus_otg_on = true;
+	}
+	if (ret)
+		dev_err(otg->phy->dev, "VBUS boost %s failed: %d\n",
+			ext ? "off" : "on", ret);
+	return ret;
 }
 
 static void dwc3_otg_notify_host_mode(struct usb_otg *otg, int host_mode)

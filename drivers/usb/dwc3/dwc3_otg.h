@@ -47,6 +47,7 @@ struct dwc3_otg {
 	struct dwc3		*dwc;
 	void __iomem		*regs;
 	struct regulator	*vbus_otg;
+	bool			vbus_otg_on;
 	struct delayed_work	sm_work;
 	struct dwc3_charger	*charger;
 	struct dwc3_ext_xceiv	*ext_xceiv;
@@ -115,6 +116,7 @@ enum dwc3_id_state {
 struct dwc3_ext_xceiv {
 	enum dwc3_id_state	id;
 	bool			bsv;
+	bool			ext_vbus;	/* host with VBUS from the partner */
 	unsigned int	cc_power_max;
 
 	/* to notify OTG about LPM exit event, provided by OTG */
@@ -128,4 +130,5 @@ struct dwc3_ext_xceiv {
 /* for external transceiver driver */
 extern int dwc3_set_ext_xceiv(struct usb_otg *otg,
 				struct dwc3_ext_xceiv *ext_xceiv);
+extern int dwc3_otg_set_ext_vbus(struct usb_otg *otg, bool ext);
 #endif /* __LINUX_USB_DWC3_OTG_H */

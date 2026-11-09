@@ -2324,8 +2324,19 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_USB_OTG:
-		/* Let OTG know about ID detection */
+		/*
+		 * Let OTG know about ID detection. 2 = host mode with VBUS
+		 * from the partner (Type-C data role swap), boost off.
+		 */
+		if (val->intval && mdwc->id_state == DWC3_ID_GROUND &&
+		    mdwc->otg_xceiv) {
+			/* already host: 1 <-> 2 only switches the boost */
+			dwc3_otg_set_ext_vbus(mdwc->otg_xceiv->otg,
+					      val->intval == 2);
+			break;
+		}
 		mdwc->id_state = val->intval ? DWC3_ID_GROUND : DWC3_ID_FLOAT;
+		mdwc->ext_xceiv.ext_vbus = val->intval == 2;
 		if (mdwc->otg_xceiv)
 			queue_work(system_nrt_wq, &mdwc->id_work);
 		break;
