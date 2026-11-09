@@ -164,7 +164,8 @@ struct uc120 {
 	bool src, dfp;			/* PD power and data role */
 	bool pd;			/* PD messaging on, handle the queue */
 	int host;			/* USB host: 0 off, 1 own VBUS, 2 partner VBUS */
-	int sink_ma;			/* sink contract current, 0 none */
+	bool sink_pd;			/* sink contract up */
+	int sink_ma;			/* its current, may be 0 */
 	u32 src_pdo;			/* partner first PDO */
 	bool swapping;			/* power role swap: Type-C events are noise */
 	bool discovering;		/* DisplayPort discovery running */
@@ -726,6 +727,7 @@ static void uc120_detach(struct uc120 *uc)
 		uc120_set_input_current(uc, uc->default_cc_ma);
 	uc->state = ST_DETACHED;
 	uc->src = uc->dfp = uc->pd = false;
+	uc->sink_pd = false;
 	uc->sink_ma = 0;
 	uc->src_pdo = 0;
 	uc->qh = uc->qt = 0;
@@ -838,6 +840,7 @@ static void uc120_sink_reset(struct uc120 *uc)
 	uc->hpd_pending = false;
 	if (uc->sink_ma)
 		uc120_set_input_current(uc, ma[uc->rp & 3]);
+	uc->sink_pd = false;
 	uc->sink_ma = 0;
 	uc->state = ST_SINK;
 }
@@ -866,6 +869,23 @@ static int uc120_wait_ctrl(struct uc120 *uc, struct pd_msg *m, int ms)
 	}
 }
 
+/*
+ * Host on the partner's VBUS: dwc3 runs no charger detection in host mode,
+ * so nobody else tells the charger what it may draw. The contract current,
+ * or the USB default before the contract.
+ */
+static void uc120_host_charge(struct uc120 *uc)
+{
+	struct power_supply *psy = uc120_usb_psy(uc);
+	int ma = uc->sink_pd ? uc->sink_ma : 500;
+
+	if (!psy || uc->host != 2)
+		return;
+	power_supply_set_online(psy, ma > 0);
+	power_supply_set_current_limit(psy, ma * 1000);
+	dev_info(uc->dev, "charging up to %d mA as host\n", ma);
+}
+
 /* data role DFP: we are the USB host, VBUS ours or the dock's */
 static void uc120_become_dfp(struct uc120 *uc)
 {
@@ -874,14 +894,16 @@ static void uc120_become_dfp(struct uc120 *uc)
 	uc120_set_host(uc, uc->src ? 1 : 2);
 	dev_info(uc->dev, "data role DFP: USB host, VBUS from %s\n",
 		 uc->src ? "us" : "the partner");
+	uc120_host_charge(uc);
 }
 
-/* DFP and sink with a contract: DisplayPort as in the source case */
+/* DFP and sink with a contract (any current): DisplayPort as from source */
 static void uc120_sink_dp(struct uc120 *uc)
 {
 	int rc;
 
-	if (!uc->dfp || uc->src || !uc->sink_ma || uc->state >= ST_DP ||
+	/* the HD-500 offers 5 V 0 mA until it is in DisplayPort mode */
+	if (!uc->dfp || uc->src || !uc->sink_pd || uc->state >= ST_DP ||
 	    !dp_alt_mode || uc->discovering)
 		return;
 	rc = uc120_dp_alt_mode(uc);
@@ -921,10 +943,13 @@ static void uc120_sink_request(struct uc120 *uc, struct pd_msg *caps)
 		return;
 	}
 	uc->sink_ma = ma;
+	uc->sink_pd = true;
 	if (uc->state < ST_PD_READY)
 		uc->state = ST_PD_READY;
-	uc120_set_input_current(uc, ma);
+	if (ma)
+		uc120_set_input_current(uc, ma);
 	dev_info(uc->dev, "PD sink contract 5 V %d mA, source %08x\n", ma, pdo);
+	uc120_host_charge(uc);
 
 	if (!uc->dfp && sink_dr_swap) {
 		/* give the dock time to swap by itself, then ask */
@@ -1006,6 +1031,7 @@ static void uc120_pr_swap_to_sink(struct uc120 *uc)
 	uc120_set_role(uc, 0, ROLE_SOURCE);	/* Rd */
 	uc120_set_role(uc, ROLE_VBUS_IN, 0);
 	uc->src = false;
+	uc->sink_pd = false;
 	uc->sink_ma = 0;
 	msleep(10);
 	if (uc120_send(uc, PD_CTRL_PS_RDY, NULL, 0))
@@ -1015,6 +1041,7 @@ static void uc120_pr_swap_to_sink(struct uc120 *uc)
 	} while (rc > 0 && !msg_is(&m, PD_CTRL_PS_RDY, false));
 	if (rc > 0) {
 		dev_info(uc->dev, "power role swap done, now sink\n");
+		uc120_host_charge(uc);
 		goto out;
 	}
 fail:
@@ -1148,7 +1175,7 @@ static void uc120_handle(struct uc120 *uc)
 		}
 		break;
 	case 100:	/* Rp change, not used for the current in a contract */
-		if (uc->state != ST_DETACHED && !uc->src && !uc->sink_ma)
+		if (uc->state != ST_DETACHED && !uc->src && !uc->sink_pd)
 			uc120_set_input_current(uc,
 				uc->rp == 3 ? 3000 : uc->rp == 2 ? 1500 : 0);
 		break;
