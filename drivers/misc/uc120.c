@@ -120,6 +120,16 @@ static bool ask_pr_swap = true;
 module_param(ask_pr_swap, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(ask_pr_swap, "ask an externally powered sink to power us");
 
+/*
+ * Hard resets sent by us: after a failed PR_Swap and when the DisplayPort
+ * link trains at no rate. Off until we know why a tester's UC120 stopped
+ * answering (self test failed until the battery was removed) after a
+ * session that used them.
+ */
+static bool hard_reset;
+module_param(hard_reset, bool, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(hard_reset, "send PD hard resets ourselves (off)");
+
 struct pd_msg {
 	int len;
 	u8 b[32];
@@ -1061,7 +1071,8 @@ static void uc120_pr_swap_to_sink(struct uc120 *uc, bool asked)
 fail:
 	dev_info(uc->dev, "power role swap failed (%d)\n", rc);
 	uc->pr_swap_failed = jiffies ? jiffies : 1;
-	if (!uc->src)
+	/* without the hard reset, the missing VBUS detaches us */
+	if (!uc->src && hard_reset)
 		uc120_hard_reset(uc);
 out:
 	/* the PHY reports the Rp/Rd change as detach and attach */
@@ -1296,6 +1307,10 @@ static void uc120_dp_reset(struct uc120 *uc)
 {
 	if (uc->state < ST_DP)
 		return;
+	if (!hard_reset) {
+		dev_info(uc->dev, "DisplayPort link trains at no rate, no reset (hard_reset=0)\n");
+		return;
+	}
 	if (uc->dp_reset_last &&
 	    time_before(jiffies, uc->dp_reset_last + 60 * HZ)) {
 		dev_info(uc->dev, "DisplayPort link down, no reset (one a minute)\n");
