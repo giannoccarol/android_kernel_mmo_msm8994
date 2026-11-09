@@ -1536,13 +1536,19 @@ void slimport_edid_process(void)
  * Link rate fallback. Through the USB-C mux and some docks the link does
  * not train at 5.4 Gbps: the hardware may report the training as done
  * while the sink lane status shows only clock recovery, or the symbol
- * error counter saturates. After two failures at a rate, lower it as a
- * DisplayPort source should, and keep it as the ceiling for this sink:
+ * error counter saturates. After LT_TRIES failures at a rate, lower it as
+ * a DisplayPort source should, and keep it as the ceiling for this sink:
  * sp_tx_bw_lc_sel() no longer raises it again for the input video, and
  * the HDMI side is told the highest pixel clock the link carries (HPD
  * pulse, the SoC reads the EDID again and drops the modes that no longer
  * fit). The ceiling is reset when a new sink is plugged.
+ *
+ * A dock that is still starting fails at every rate for a while (the
+ * HD-500 right after DR_Swap), and some sinks only train at the top rate:
+ * when the lowest rate fails too, start again from the sink maximum
+ * instead of staying at 1.62 Gbps for good.
  */
+#define LT_TRIES	4
 static unchar lt_fail_count;
 static unchar sp_link_bw_cap = LINK_6P75G;
 
@@ -1556,15 +1562,23 @@ static void sp_tx_lt_failed(void)
 {
 	unchar c;
 
-	if (++lt_fail_count < 2 || g_changed_bandwidth <= LINK_1P62G)
+	if (++lt_fail_count < LT_TRIES)
 		return;
 	lt_fail_count = 0;
-	g_changed_bandwidth = (g_changed_bandwidth > LINK_2P7G) ?
-			LINK_2P7G : LINK_1P62G;
-	sp_link_bw_cap = g_changed_bandwidth;
-	pr_info("%s %s : lowering link rate to %.2x, max pixel clock %lu kHz\n",
-		LOG_TAG, __func__, (uint)g_changed_bandwidth,
-		sp_tx_max_pclk_khz());
+	if (g_changed_bandwidth <= LINK_1P62G) {
+		sp_link_bw_cap = LINK_6P75G;
+		g_changed_bandwidth = sp_rx_bandwidth ? sp_rx_bandwidth :
+				      LINK_5P4G;
+		pr_info("%s %s : no rate trains, back to %.2x\n", LOG_TAG,
+			__func__, (uint)g_changed_bandwidth);
+	} else {
+		g_changed_bandwidth = (g_changed_bandwidth > LINK_2P7G) ?
+				LINK_2P7G : LINK_1P62G;
+		sp_link_bw_cap = g_changed_bandwidth;
+		pr_info("%s %s : lowering link rate to %.2x, max pixel clock %lu kHz\n",
+			LOG_TAG, __func__, (uint)g_changed_bandwidth,
+			sp_tx_max_pclk_khz());
+	}
 
 	sp_read_reg(TX_P2, SP_TX_VID_CTRL3_REG, &c);
 	if (c & HPD_OUT) {
@@ -3331,13 +3345,31 @@ static void sp_tx_auth_done_int_handler(void)
 }
 static void sp_tx_polling_err_int_handler(void)
 {
-/*	unchar temp; */
+	unchar temp;
+	int i;
+
 	pr_info("%s %s : sp_tx_polling_err_int_handler \n", LOG_TAG, __func__);
+	/*
+	 * One missed AUX poll is not a lost sink: docks with a busy DP to HDMI
+	 * converter (ThinkPad USB-C Dock) miss one every 30-50 s, and a power
+	 * down here blanks the screen for over a second each time. Reset the
+	 * AUX channel and read the DPCD revision; tear the link down only if
+	 * the sink no longer answers. An unplug still arrives as HPD low.
+	 */
+	for (i = 0; i < 3; i++) {
+		sp_tx_rst_aux();
+		if (sp_tx_aux_dpcdread_bytes(0x00, 0x00, 0x00, 1, &temp) ==
+		    AUX_OK) {
+			pr_info("%s %s : sink answers (DPCD %02x), link kept\n",
+				LOG_TAG, __func__, temp);
+			return;
+		}
+		msleep(20);
+	}
 #ifdef CONFIG_SLIMPORT_DYNAMIC_HPD
 	slimport_set_hdmi_hpd(0);
 #endif
-	/* if (AUX_ERR == sp_tx_aux_dpcdread_bytes(0x00, 0x00, 0x00, 1, &temp)) */
-		system_power_ctrl(0);
+	system_power_ctrl(0);
 }
 static void sp_tx_lt_done_int_handler(void)
 {
