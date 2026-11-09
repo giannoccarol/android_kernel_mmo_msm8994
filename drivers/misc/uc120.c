@@ -168,6 +168,7 @@ struct uc120 {
 	u32 src_pdo;			/* partner first PDO */
 	bool swapping;			/* power role swap: Type-C events are noise */
 	bool discovering;		/* DisplayPort discovery running */
+	unsigned long pr_swap_failed;	/* jiffies of the last failed PR_Swap */
 	bool hpd_pending;		/* Attention with HPD high during discovery */
 	u32 dp_status;			/* last DP status from an Attention */
 	int pin;
@@ -1018,6 +1019,7 @@ static void uc120_pr_swap_to_sink(struct uc120 *uc)
 	}
 fail:
 	dev_info(uc->dev, "power role swap failed (%d)\n", rc);
+	uc->pr_swap_failed = jiffies ? jiffies : 1;
 	if (!uc->src)
 		uc120_hard_reset(uc);
 out:
@@ -1060,7 +1062,10 @@ static void uc120_handle_msg(struct uc120 *uc, struct pd_msg *m)
 			uc120_sink_dp(uc);
 		}
 	} else if (msg_is(m, PD_CTRL_PR_SWAP, false) && uc->src &&
-		   uc->state >= ST_PD_READY && pr_swap) {
+		   uc->state >= ST_PD_READY && pr_swap &&
+		   (!uc->pr_swap_failed ||
+		    time_after(jiffies, uc->pr_swap_failed + 30 * HZ))) {
+		/* after a failed swap, 30 s of Reject: no detach loop */
 		uc120_pr_swap_to_sink(uc);
 	} else if (msg_is(m, PD_CTRL_DR_SWAP, false) ||
 		   msg_is(m, PD_CTRL_PR_SWAP, false) ||
