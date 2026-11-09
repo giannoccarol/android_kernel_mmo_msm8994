@@ -69,6 +69,7 @@
 #define PD_CTRL_DR_SWAP		9
 #define PD_CTRL_PR_SWAP		10
 #define PD_CTRL_VCONN_SWAP	11
+#define PD_CTRL_WAIT		12
 #define PD_CTRL_SOFT_RESET	13
 #define PD_DATA_SRC_CAP		1
 #define PD_DATA_REQUEST		2
@@ -76,6 +77,7 @@
 #define PD_DATA_VDM		15
 #define PD_SRC_PDO		0x3601905a	/* fixed 5 V 900 mA, DRP, USB comm, DRD */
 #define PD_SNK_PDO		0x2601912c	/* fixed 5 V 3 A */
+#define TX_HARD_RESET		0x20
 
 #define VDM_HDR(cmd, pos, svid)	((u32)(svid) << 16 | BIT(15) | (pos) << 8 | (cmd))
 #define SVID_PD			0xff00
@@ -101,6 +103,18 @@ MODULE_PARM_DESC(poll_ms, "fallback register poll period while idle, 0 = IRQ onl
 
 static bool dp_alt_mode = true;
 module_param(dp_alt_mode, bool, S_IRUGO | S_IWUSR);
+
+static bool pd_sink = true;
+module_param(pd_sink, bool, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(pd_sink, "USB PD as sink: contract, DR_Swap, DisplayPort");
+
+static bool sink_dr_swap;
+module_param(sink_dr_swap, bool, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(sink_dr_swap, "as sink, ask a powered dock for the host role");
+
+static bool pr_swap = true;
+module_param(pr_swap, bool, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(pr_swap, "let a powered dock that attached as sink charge us");
 
 struct pd_msg {
 	int len;
@@ -147,6 +161,13 @@ struct uc120 {
 	struct pd_msg q[MSG_Q];
 	int qh, qt;
 	bool vconn_on, vbus_on, hpd, cable;
+	bool src, dfp;			/* PD power and data role */
+	bool pd;			/* PD messaging on, handle the queue */
+	int host;			/* USB host: 0 off, 1 own VBUS, 2 partner VBUS */
+	int sink_ma;			/* sink contract current, 0 none */
+	u32 src_pdo;			/* partner first PDO */
+	bool swapping;			/* power role swap: Type-C events are noise */
+	bool discovering;		/* DisplayPort discovery running */
 	bool hpd_pending;		/* Attention with HPD high during discovery */
 	u32 dp_status;			/* last DP status from an Attention */
 	int pin;
@@ -249,16 +270,27 @@ static void uc120_set_input_current(struct uc120 *uc, int ma)
 	dev_info(uc->dev, "input current limit %d mA\n", ma);
 }
 
-static void uc120_set_vbus(struct uc120 *uc, bool on)
+/*
+ * USB host mode: 0 off, 1 with our VBUS (dwc3 turns the OTG boost on with
+ * it), 2 with VBUS from the partner (a powered dock after DR_Swap).
+ */
+static void uc120_set_host(struct uc120 *uc, int mode)
 {
 	struct power_supply *psy = uc120_usb_psy(uc);
-	union power_supply_propval v = { .intval = on };
+	union power_supply_propval v = { .intval = 0 };
 
-	if (uc->vbus_on == on || !psy || !psy->set_property)
+	if (uc->host == mode || !psy || !psy->set_property)
 		return;
-	/* USB host mode; dwc3 turns the OTG boost (VBUS) on with it */
+	/* 1 <-> 2 with the host up only switches the boost (dwc3-msm) */
+	v.intval = mode;
 	psy->set_property(psy, POWER_SUPPLY_PROP_USB_OTG, &v);
-	uc->vbus_on = on;
+	uc->host = mode;
+	uc->vbus_on = mode == 1;
+}
+
+static void uc120_set_vbus(struct uc120 *uc, bool on)
+{
+	uc120_set_host(uc, on ? 1 : 0);
 }
 
 static void uc120_set_vconn(struct uc120 *uc, bool on)
@@ -356,6 +388,8 @@ static void uc120_poll(struct uc120 *uc)
 
 static bool uc120_detached(struct uc120 *uc)
 {
+	if (uc->swapping)
+		return uc->tc_event == 99 || kthread_should_stop();
 	return uc->tc_event == TC_DETACH || uc->tc_event == TC_DETACH2 ||
 	       uc->tc_event == 99 || kthread_should_stop();
 }
@@ -366,7 +400,9 @@ static int uc120_send(struct uc120 *uc, u16 hdr, const u32 *dos, int nd)
 	int len = 2 + 4 * nd, i, try;
 	unsigned long end;
 
-	hdr |= 0x0040 | 0x0020 | 0x0100 | (uc->tx_id << 9) | (nd << 12);
+	/* PD 2.0, our data role (bit 5) and power role (bit 8) */
+	hdr |= 0x0040 | (uc->dfp ? 0x0020 : 0) | (uc->src ? 0x0100 : 0) |
+	       (uc->tx_id << 9) | (nd << 12);
 	b[0] = hdr;
 	b[1] = hdr >> 8;
 	for (i = 0; i < nd; i++) {
@@ -527,7 +563,7 @@ static int uc120_dp_configure(struct uc120 *uc)
 	return rc;
 }
 
-static int uc120_dp_alt_mode(struct uc120 *uc)
+static int __uc120_dp_alt_mode(struct uc120 *uc)
 {
 	struct pd_msg m;
 	u32 st = 1, mv;
@@ -596,6 +632,22 @@ static int uc120_dp_alt_mode(struct uc120 *uc)
 	return 0;
 }
 
+/*
+ * A dock may swap roles in the middle of the discovery (PR_Swap, then its
+ * Source_Capabilities): do not start a second discovery from there.
+ */
+static int uc120_dp_alt_mode(struct uc120 *uc)
+{
+	int rc;
+
+	if (uc->discovering)
+		return -EBUSY;
+	uc->discovering = true;
+	rc = __uc120_dp_alt_mode(uc);
+	uc->discovering = false;
+	return rc;
+}
+
 /* source contract: Source_Capabilities until GoodCRC, then Request */
 static int uc120_source_contract(struct uc120 *uc)
 {
@@ -629,6 +681,7 @@ static int uc120_source_contract(struct uc120 *uc)
 	msleep(30);
 	uc120_send(uc, PD_CTRL_PS_RDY, NULL, 0);
 	uc->state = ST_PD_READY;
+	uc->pd = true;
 	dev_info(uc->dev, "PD contract 5 V, request %08x\n", msg_do(&m, 0));
 	return 0;
 }
@@ -655,7 +708,7 @@ static void uc120_vbus_in(struct uc120 *uc)
 		uc120_set_role(uc, ROLE_VBUS_IN, 0);
 	} else {
 		uc120_set_role(uc, 0, ROLE_VBUS_IN);
-		if (uc->state == ST_SINK)
+		if (uc->state != ST_DETACHED && !uc->src)
 			uc->tc_event = TC_DETACH;
 	}
 }
@@ -668,9 +721,12 @@ static void uc120_detach(struct uc120 *uc)
 	uc120_set_vbus(uc, false);
 	uc120_set_vconn(uc, false);
 	uc120_set_role(uc, 0, ROLE_SOURCE | ROLE_DFP | ROLE_VBUS_IN);
-	if (uc->state == ST_SINK && uc->default_cc_ma >= 0)
+	if (!uc->src && uc->default_cc_ma >= 0)
 		uc120_set_input_current(uc, uc->default_cc_ma);
 	uc->state = ST_DETACHED;
+	uc->src = uc->dfp = uc->pd = false;
+	uc->sink_ma = 0;
+	uc->src_pdo = 0;
 	uc->qh = uc->qt = 0;
 	uc->pin = 0;
 	uc->partner_id = 0;
@@ -722,6 +778,7 @@ static void uc120_attach_source(struct uc120 *uc, bool cable)
 	dev_info(uc->dev, "sink attached on CC%d%s\n", uc->orient,
 		 cable ? ", Ra" : "");
 	uc->state = ST_SOURCE;
+	uc->src = uc->dfp = true;
 	uc->cable = cable;
 	/*
 	 * tyc InitializeDfpRole: mux USB, VCONN, 100 ms, VBUS, 100 ms. tyc
@@ -745,11 +802,234 @@ static void uc120_attach_sink(struct uc120 *uc)
 	static const int ma[] = { 0, 0, 1500, 3000 };
 
 	uc->state = ST_SINK;
+	uc->src = uc->dfp = false;
+	uc->tx_id = 0;
+	uc->qh = uc->qt = 0;
 	uc120_set_ctrl(uc, 0, CTRL_UNATTACHED);
 	uc120_mux(uc, MUX_USB);
 	dev_info(uc->dev, "source attached on CC%d, Rp %d\n", uc->orient,
 		 uc->rp);
 	uc120_set_input_current(uc, ma[uc->rp & 3]);
+	/*
+	 * tyc InitializeUfpRole: PD messaging on as sink. A powered dock
+	 * sends Source_Capabilities and then takes us to host with DR_Swap.
+	 */
+	if (pd_sink) {
+		uc120_set_ctrl(uc, CTRL_PD_EN, 0);
+		uc->pd = true;
+	}
+}
+
+/* sink hard reset or data role back to UFP: no host, no DisplayPort */
+static void uc120_sink_reset(struct uc120 *uc)
+{
+	static const int ma[] = { 0, 0, 1500, 3000 };
+
+	uc120_hpd(uc, false);
+	uc120_mux(uc, MUX_USB);
+	uc120_set_host(uc, 0);
+	uc120_set_role(uc, 0, ROLE_DFP);
+	uc->dfp = false;
+	uc->tx_id = 0;
+	uc->qh = uc->qt = 0;
+	uc->pin = 0;
+	uc->dp_status = 0;
+	uc->hpd_pending = false;
+	if (uc->sink_ma)
+		uc120_set_input_current(uc, ma[uc->rp & 3]);
+	uc->sink_ma = 0;
+	uc->state = ST_SINK;
+}
+
+static void uc120_hard_reset(struct uc120 *uc)
+{
+	uc120_write(uc, UC120_TX_CMD, TX_HARD_RESET);
+	uc->tx_id = 0;
+	dev_info(uc->dev, "hard reset sent\n");
+}
+
+/* the next control message within ms; data messages are skipped */
+static int uc120_wait_ctrl(struct uc120 *uc, struct pd_msg *m, int ms)
+{
+	unsigned long end = jiffies + msecs_to_jiffies(ms);
+	long left;
+	int rc;
+
+	for (;;) {
+		left = (long)(end - jiffies);
+		if (left <= 0)
+			return 0;
+		rc = uc120_recv(uc, m, jiffies_to_msecs(left));
+		if (rc <= 0 || !msg_ndo(m))
+			return rc;
+	}
+}
+
+/* data role DFP: we are the USB host, VBUS ours or the dock's */
+static void uc120_become_dfp(struct uc120 *uc)
+{
+	uc120_set_role(uc, ROLE_DFP, 0);
+	uc->dfp = true;
+	uc120_set_host(uc, uc->src ? 1 : 2);
+	dev_info(uc->dev, "data role DFP: USB host, VBUS from %s\n",
+		 uc->src ? "us" : "the partner");
+}
+
+/* DFP and sink with a contract: DisplayPort as in the source case */
+static void uc120_sink_dp(struct uc120 *uc)
+{
+	int rc;
+
+	if (!uc->dfp || uc->src || !uc->sink_ma || uc->state >= ST_DP ||
+	    !dp_alt_mode || uc->discovering)
+		return;
+	rc = uc120_dp_alt_mode(uc);
+	if (rc && rc != -ENODEV)
+		dev_info(uc->dev, "no DisplayPort mode (%d), partner %08x\n",
+			 rc, uc->partner_id);
+}
+
+/* Source_Capabilities as sink: ask for the 5 V PDO, the most it offers */
+static void uc120_sink_request(struct uc120 *uc, struct pd_msg *caps)
+{
+	struct pd_msg m;
+	u32 pdo = msg_do(caps, 0), rdo;
+	int ma = min_t(int, (pdo & 0x3ff) * 10, 3000), rc = 0, i;
+
+	uc->src_pdo = pdo;
+	/* tyc: object 1, USB communications capable, no USB suspend */
+	rdo = 1 << 28 | BIT(25) | BIT(24) | (ma / 10) << 10 | ma / 10;
+	for (i = 0; i < 3; i++) {
+		if (uc120_send(uc, PD_DATA_REQUEST, &rdo, 1))
+			return;
+		rc = uc120_wait_ctrl(uc, &m, 100);
+		if (rc <= 0 || !msg_is(&m, PD_CTRL_WAIT, false))
+			break;
+		msleep(100);
+	}
+	if (rc <= 0 || !msg_is(&m, PD_CTRL_ACCEPT, false)) {
+		dev_info(uc->dev, "PD request %08x not accepted (%d, %04x)\n",
+			 rdo, rc, rc > 0 ? msg_hdr(&m) : 0);
+		return;
+	}
+	do {
+		rc = uc120_wait_ctrl(uc, &m, 600);
+	} while (rc > 0 && !msg_is(&m, PD_CTRL_PS_RDY, false));
+	if (rc <= 0) {
+		dev_info(uc->dev, "no PS_RDY after the request (%d)\n", rc);
+		return;
+	}
+	uc->sink_ma = ma;
+	if (uc->state < ST_PD_READY)
+		uc->state = ST_PD_READY;
+	uc120_set_input_current(uc, ma);
+	dev_info(uc->dev, "PD sink contract 5 V %d mA, source %08x\n", ma, pdo);
+
+	if (!uc->dfp && sink_dr_swap) {
+		/* give the dock time to swap by itself, then ask */
+		while (!uc->dfp && uc120_recv(uc, &m, 300) > 0)
+			uc120_answer(uc, &m);
+		if (!uc->dfp && !uc120_send(uc, PD_CTRL_DR_SWAP, NULL, 0)) {
+			rc = uc120_wait_ctrl(uc, &m, 100);
+			if (rc > 0 && msg_is(&m, PD_CTRL_ACCEPT, false))
+				uc120_become_dfp(uc);
+			else
+				dev_info(uc->dev, "DR_Swap refused (%d, %04x)\n",
+					 rc, rc > 0 ? msg_hdr(&m) : 0);
+		}
+	}
+	uc120_sink_dp(uc);
+}
+
+/*
+ * tyc as UFP: a dock that is DFP discovers us before it gives us the host
+ * role. Identity: Microsoft, USB host and device, modal; DisplayPort mode
+ * as DFP_D (video source), pin C and E. Enter Mode is refused.
+ */
+static bool uc120_ufp_vdm(struct uc120 *uc, struct pd_msg *m)
+{
+	u32 vh = msg_do(m, 0), d[4];
+	int n = 0;
+
+	switch (vh & 0x1f) {
+	case VDM_DISC_IDENT:
+		if ((vh >> 16) == SVID_PD) {
+			d[0] = 0xff008041;
+			d[1] = 0xd400045e;
+			d[2] = 0;
+			d[3] = 0x0a000000;
+			n = 4;
+		}
+		break;
+	case VDM_DISC_SVID:
+		if ((vh >> 16) == SVID_PD) {
+			d[0] = 0xff008042;
+			d[1] = 0xff010000;
+			n = 2;
+		}
+		break;
+	case VDM_DISC_MODES:
+		if ((vh >> 16) == SVID_DP) {
+			d[0] = 0xff018043;
+			d[1] = 0x00001446;
+			n = 2;
+		}
+		break;
+	}
+	dev_info(uc->dev, "partner VDM %08x to us as UFP%s\n", vh,
+		 n ? "" : ", NAK");
+	if (!n)
+		return false;
+	uc120_send(uc, PD_DATA_VDM, d, n);
+	return true;
+}
+
+/*
+ * PR_Swap while we are source (a powered dock that attached as sink, like
+ * the ThinkPad USB-C Dock): Accept, our VBUS off with the host left up,
+ * Rd, PS_RDY, then the dock's PS_RDY and its Source_Capabilities. tyc
+ * accepts it always; the data role (DFP), VCONN and DisplayPort stay.
+ */
+static void uc120_pr_swap_to_sink(struct uc120 *uc)
+{
+	struct pd_msg m;
+	int rc = -EIO;
+
+	dev_info(uc->dev, "power role swap: the partner will power VBUS\n");
+	uc->swapping = true;
+	if (uc120_send(uc, PD_CTRL_ACCEPT, NULL, 0))
+		goto out;
+	msleep(30);			/* tSrcTransition */
+	uc120_set_host(uc, uc->dfp ? 2 : 0);	/* boost off, xHCI stays */
+	msleep(150);			/* VBUS down to vSafe0V */
+	uc120_set_role(uc, 0, ROLE_SOURCE);	/* Rd */
+	uc120_set_role(uc, ROLE_VBUS_IN, 0);
+	uc->src = false;
+	uc->sink_ma = 0;
+	msleep(10);
+	if (uc120_send(uc, PD_CTRL_PS_RDY, NULL, 0))
+		goto fail;
+	do {
+		rc = uc120_wait_ctrl(uc, &m, 600);	/* tPSSourceOn */
+	} while (rc > 0 && !msg_is(&m, PD_CTRL_PS_RDY, false));
+	if (rc > 0) {
+		dev_info(uc->dev, "power role swap done, now sink\n");
+		goto out;
+	}
+fail:
+	dev_info(uc->dev, "power role swap failed (%d)\n", rc);
+	if (!uc->src)
+		uc120_hard_reset(uc);
+out:
+	/* the PHY reports the Rp/Rd change as detach and attach */
+	msleep(20);
+	uc120_poll(uc);
+	if (uc->tc_event && uc->tc_event != 99) {
+		dev_info(uc->dev, "Type-C event %d during the swap ignored\n",
+			 uc->tc_event);
+		uc->tc_event = 0;
+	}
+	uc->swapping = false;
 }
 
 /* messages while a contract is up */
@@ -760,28 +1040,44 @@ static void uc120_handle_msg(struct uc120 *uc, struct pd_msg *m)
 	if (msg_is(m, PD_CTRL_SOFT_RESET, false)) {
 		uc->tx_id = 0;
 		uc120_send(uc, PD_CTRL_ACCEPT, NULL, 0);
+	} else if (msg_is(m, PD_DATA_SRC_CAP, true) && !uc->src) {
+		uc120_sink_request(uc, m);
 	} else if (msg_is(m, PD_CTRL_GET_SRC_CAP, false)) {
 		pdo = PD_SRC_PDO;
 		uc120_send(uc, PD_DATA_SRC_CAP, &pdo, 1);
 	} else if (msg_is(m, PD_CTRL_GET_SINK_CAP, false)) {
 		pdo = PD_SNK_PDO;
 		uc120_send(uc, PD_DATA_SINK_CAP, &pdo, 1);
-	} else if (msg_is(m, PD_DATA_REQUEST, true)) {
+	} else if (msg_is(m, PD_DATA_REQUEST, true) && uc->src) {
 		uc120_send(uc, PD_CTRL_ACCEPT, NULL, 0);
 		msleep(30);
 		uc120_send(uc, PD_CTRL_PS_RDY, NULL, 0);
+	} else if (msg_is(m, PD_CTRL_DR_SWAP, false) && !uc->dfp) {
+		/* tyc: always accepted as UFP, then Discover Identity */
+		dev_info(uc->dev, "DR_Swap from the partner, accepted\n");
+		if (!uc120_send(uc, PD_CTRL_ACCEPT, NULL, 0)) {
+			uc120_become_dfp(uc);
+			uc120_sink_dp(uc);
+		}
+	} else if (msg_is(m, PD_CTRL_PR_SWAP, false) && uc->src &&
+		   uc->state >= ST_PD_READY && pr_swap) {
+		uc120_pr_swap_to_sink(uc);
 	} else if (msg_is(m, PD_CTRL_DR_SWAP, false) ||
 		   msg_is(m, PD_CTRL_PR_SWAP, false) ||
 		   msg_is(m, PD_CTRL_VCONN_SWAP, false) ||
-		   msg_is(m, PD_CTRL_GOTOMIN, false)) {
-		/* we stay DFP, source and VCONN source */
+		   (msg_is(m, PD_CTRL_GOTOMIN, false) && uc->src)) {
+		/* we stay host, and source or VCONN source */
+		dev_info(uc->dev, "swap %d from the partner rejected\n",
+			 msg_hdr(m) & 0xf);
 		uc120_send(uc, PD_CTRL_REJECT, NULL, 0);
 	} else if (msg_is(m, PD_DATA_VDM, true) &&
 		   (msg_do(m, 0) & BIT(15)) && !VDM_TYPE(msg_do(m, 0)) &&
 		   (msg_do(m, 0) & 0x1f) != VDM_ATTENTION) {
-		/* structured VDM request from the partner: nothing to offer */
-		pdo = (msg_do(m, 0) & ~(3 << 6)) | 2 << 6;
-		uc120_send(uc, PD_DATA_VDM, &pdo, 1);
+		/* structured VDM request: discovery as UFP, NAK otherwise */
+		if (uc->dfp || !uc120_ufp_vdm(uc, m)) {
+			pdo = (msg_do(m, 0) & ~(3 << 6)) | 2 << 6;
+			uc120_send(uc, PD_DATA_VDM, &pdo, 1);
+		}
 	} else if (msg_is(m, PD_DATA_VDM, true) &&
 		   (msg_do(m, 0) & 0x1f) == VDM_ATTENTION &&
 		   (msg_do(m, 0) >> 16) == SVID_DP && msg_ndo(m) > 1) {
@@ -831,8 +1127,11 @@ static void uc120_handle(struct uc120 *uc)
 		if (uc->state == ST_DETACHED)
 			uc120_attach_sink(uc);
 		break;
-	case 99:	/* hard reset while a contract was up */
-		if (uc->state >= ST_PD_READY) {
+	case 99:	/* hard reset */
+		if (uc->state != ST_DETACHED && !uc->src) {
+			/* the source drops VBUS and starts over */
+			uc120_sink_reset(uc);
+		} else if (uc->state >= ST_PD_READY) {
 			uc120_hpd(uc, false);
 			uc120_mux(uc, MUX_USB);
 			uc->hard_resets = 0;
@@ -843,8 +1142,8 @@ static void uc120_handle(struct uc120 *uc)
 			uc120_negotiate(uc);
 		}
 		break;
-	case 100:	/* Rp change */
-		if (uc->state == ST_SINK)
+	case 100:	/* Rp change, not used for the current in a contract */
+		if (uc->state != ST_DETACHED && !uc->src && !uc->sink_ma)
 			uc120_set_input_current(uc,
 				uc->rp == 3 ? 3000 : uc->rp == 2 ? 1500 : 0);
 		break;
@@ -853,10 +1152,9 @@ static void uc120_handle(struct uc120 *uc)
 	default:
 		dev_info(uc->dev, "unhandled Type-C state %d\n", ev);
 	}
-	while (uc->state >= ST_PD_READY && uc->qh != uc->qt &&
-	       uc120_recv(uc, &m, 0) > 0)
+	while (uc->pd && uc->qh != uc->qt && uc120_recv(uc, &m, 0) > 0)
 		uc120_handle_msg(uc, &m);
-	if (uc->state < ST_PD_READY)
+	if (!uc->pd)
 		uc->qh = uc->qt;
 }
 
@@ -954,10 +1252,11 @@ static ssize_t uc120_status_show(struct device *dev,
 	struct uc120 *uc = dev_get_drvdata(dev);
 
 	return scnprintf(buf, PAGE_SIZE,
-		"state=%s orient=CC%d rp=%d vbus=%d vconn=%d hpd=%d pin=%02x partner=%08x mode=%08x\n",
+		"state=%s orient=CC%d rp=%d vbus=%d vconn=%d hpd=%d pin=%02x partner=%08x mode=%08x power=%s data=%s host=%d sink_ma=%d src_pdo=%08x\n",
 		state_names[uc->state], uc->orient, uc->rp, uc->vbus_on,
 		uc->vconn_on, uc->hpd, uc->pin, uc->partner_id,
-		uc->dp_mode_vdo);
+		uc->dp_mode_vdo, uc->src ? "source" : "sink",
+		uc->dfp ? "dfp" : "ufp", uc->host, uc->sink_ma, uc->src_pdo);
 }
 static DEVICE_ATTR(status, S_IRUGO, uc120_status_show, NULL);
 
