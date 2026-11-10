@@ -2561,9 +2561,14 @@ static int hdmi_tx_audio_info_setup(struct platform_device *pdev,
 		return -ENODEV;
 	}
 
+	/*
+	 * Keep power_mutex while writing the core registers: the audio
+	 * driver calls this at any time, and hdmi_tx_power_off() turns the
+	 * core clocks off under the same mutex. Unclocked register writes
+	 * hang the bus with no log (seen with USB-C docks toggling HPD).
+	 */
 	mutex_lock(&hdmi_ctrl->power_mutex);
 	if (!hdmi_tx_is_dvi_mode(hdmi_ctrl) && hdmi_ctrl->panel_power_on) {
-		mutex_unlock(&hdmi_ctrl->power_mutex);
 		/* Map given sample rate to Enum */
 		if (sample_rate == 32000)
 			sample_rate = AUDIO_SAMPLE_RATE_32KHZ;
@@ -2591,9 +2596,9 @@ static int hdmi_tx_audio_info_setup(struct platform_device *pdev,
 			DEV_ERR("%s: hdmi_tx_audio_iframe_setup failed.rc=%d\n",
 				__func__, rc);
 	} else {
-		mutex_unlock(&hdmi_ctrl->power_mutex);
 		rc = -EPERM;
 	}
+	mutex_unlock(&hdmi_ctrl->power_mutex);
 
 	return rc;
 } /* hdmi_tx_audio_info_setup */
@@ -2873,16 +2878,20 @@ static int hdmi_tx_power_off(struct mdss_panel_data *panel_data)
 		mutex_unlock(&hdmi_ctrl->power_mutex);
 		DEV_ERR("%s: invalid input\n", __func__);
 		return -EINVAL;
-	} else {
-		mutex_unlock(&hdmi_ctrl->power_mutex);
 	}
 
 	io = &hdmi_ctrl->pdata.io[HDMI_TX_CORE_IO];
 	if (!io->base) {
+		mutex_unlock(&hdmi_ctrl->power_mutex);
 		DEV_ERR("%s: Core io is not initialized\n", __func__);
 		return -EINVAL;
 	}
 
+	/*
+	 * Hold power_mutex until panel_power_on is false, so that
+	 * hdmi_tx_audio_info_setup() cannot write the core registers while
+	 * the core clocks go off.
+	 */
 	if (!hdmi_tx_is_dvi_mode(hdmi_ctrl))
 		hdmi_tx_audio_off(hdmi_ctrl);
 
@@ -2892,7 +2901,6 @@ static int hdmi_tx_power_off(struct mdss_panel_data *panel_data)
 
 	hdmi_tx_core_off(hdmi_ctrl);
 
-	mutex_lock(&hdmi_ctrl->power_mutex);
 	hdmi_ctrl->panel_power_on = false;
 	mutex_unlock(&hdmi_ctrl->power_mutex);
 
