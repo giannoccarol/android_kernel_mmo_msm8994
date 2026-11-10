@@ -187,6 +187,8 @@ struct uc120 {
 	unsigned long vbus_grace;	/* after PR_Swap: the dock's VBUS rising */
 	bool dp_reset_req;		/* bridge: no link at any rate */
 	unsigned long dp_reset_last;	/* jiffies of the last such hard reset */
+	bool hw_ok;			/* FPGA passed the self test */
+	int hw_tries;			/* self tests failed since probe */
 	bool hpd_pending;		/* Attention with HPD high during discovery */
 	u32 dp_status;			/* last DP status from an Attention */
 	int pin;
@@ -1285,6 +1287,43 @@ static int uc120_hw_init(struct uc120 *uc)
 	return 0;
 }
 
+/*
+ * Twice a tester's FPGA answered only zeros at boot (self test failed,
+ * role 00) after the phone had frozen or crashed with a dock plugged in,
+ * until the battery was removed. Before giving up: clock it off and on,
+ * clock the SPI with a long dummy frame, and try again; the thread keeps
+ * trying every two seconds for a minute.
+ */
+#define HW_TRIES	30
+
+static int uc120_hw_recover(struct uc120 *uc)
+{
+	int rc;
+
+	if (uc->xtal) {
+		clk_disable_unprepare(uc->xtal);
+		msleep(100);
+		rc = clk_prepare_enable(uc->xtal);
+		if (rc) {
+			dev_err(uc->dev, "xtal enable failed: %d\n", rc);
+			uc->xtal = NULL;	/* not ours to disable any more */
+		}
+		msleep(50);
+	}
+	memset(uc->txbuf, 0, 32);
+	uc120_xfer(uc, 32);
+	rc = uc120_hw_init(uc);
+	uc->hw_tries++;
+	if (!rc) {
+		uc->hw_ok = true;
+		dev_info(uc->dev, "self test passed after %d tries\n",
+			 uc->hw_tries);
+	} else if (uc->hw_tries == HW_TRIES) {
+		dev_err(uc->dev, "FPGA does not answer, giving up: remove the battery for 10 s\n");
+	}
+	return rc;
+}
+
 static struct uc120 *uc120_dev;
 
 /* from the ANX7816 bridge: the DisplayPort link trains at no rate */
@@ -1332,11 +1371,20 @@ static int uc120_thread(void *data)
 		long t = poll_ms ? msecs_to_jiffies(poll_ms) :
 				   MAX_SCHEDULE_TIMEOUT;
 
+		if (!uc->hw_ok)
+			t = msecs_to_jiffies(2000);
 		wait_event_freezable_timeout(uc->wq, uc->irq_pending ||
 					     uc->psy_changed || uc->dp_reset_req ||
 					     kthread_should_stop(), t);
 		uc->irq_pending = false;
 		mutex_lock(&uc->lock);
+		if (!uc->hw_ok) {
+			uc->psy_changed = uc->dp_reset_req = false;
+			if (uc->hw_tries < HW_TRIES)
+				uc120_hw_recover(uc);
+			mutex_unlock(&uc->lock);
+			continue;
+		}
 		if (uc->dp_reset_req) {
 			uc->dp_reset_req = false;
 			uc120_dp_reset(uc);
@@ -1396,6 +1444,10 @@ static ssize_t uc120_status_show(struct device *dev,
 {
 	struct uc120 *uc = dev_get_drvdata(dev);
 
+	if (!uc->hw_ok)
+		return scnprintf(buf, PAGE_SIZE,
+			"state=no-answer self-tests=%d (remove the battery for 10 s if it stays)\n",
+			uc->hw_tries + 1);
 	return scnprintf(buf, PAGE_SIZE,
 		"state=%s orient=CC%d rp=%d vbus=%d vconn=%d hpd=%d pin=%02x partner=%08x mode=%08x power=%s data=%s host=%d sink_ma=%d src_pdo=%08x\n",
 		state_names[uc->state], uc->orient, uc->rp, uc->vbus_on,
@@ -1517,9 +1569,15 @@ static int uc120_probe(struct spi_device *spi)
 
 	mutex_lock(&uc->lock);
 	rc = uc120_hw_init(uc);
+	if (!rc)
+		uc->hw_ok = true;
+	else if (rc == -ENODEV && !uc120_hw_recover(uc))
+		rc = 0;
 	mutex_unlock(&uc->lock);
-	if (rc)
+	if (rc && rc != -ENODEV)
 		goto err_clk;
+	if (!uc->hw_ok)
+		dev_err(uc->dev, "self test failed, trying again in the background\n");
 
 	gpio = of_get_named_gpio(np, "microsoft,irq-gpio", 0);
 	if (gpio_is_valid(gpio) && !devm_gpio_request_one(uc->dev, gpio,
