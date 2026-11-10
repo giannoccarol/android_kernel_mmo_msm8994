@@ -726,6 +726,33 @@ void xtal_clk_sel(void)
 	/* sp_write_reg(RX_P0, 0x49, 0x5b);//cec test */
 }
 
+/*
+ * Init values the Windows driver (hdmidpi.sys) writes and this one did
+ * not, for the Microsoft HD-500 dock that fails clock recovery on most
+ * plugs (tools/usbc/RE-HDMIDPI-ANX7816.md). Each is a bit of win_init so
+ * that it can be turned off from sysfs, applied on the next plug:
+ * 1 = TX_P2 0xDD (XTAL/PLL) = 0x83, 2 = no 3.3 V SlimPort dongle output,
+ * 4 = TX_P0 SYS_CTRL3 = 0x34 (HPD forced high in the DP transmitter).
+ */
+static int win_init = 7;
+module_param(win_init, int, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(win_init, "Windows init values: 1 XTAL/PLL, 2 no 3.3 V, 4 SYS_CTRL3");
+
+static void sp_tx_win_init(void)
+{
+	unchar dd, c3;
+
+	sp_read_reg(TX_P2, TX_ANALOG_DEBUG2, &dd);
+	sp_read_reg(TX_P0, SP_TX_SYS_CTRL3_REG, &c3);
+	if (win_init & 1)
+		sp_write_reg(TX_P2, TX_ANALOG_DEBUG2, 0x83);
+	if (win_init & 4)
+		sp_write_reg(TX_P0, SP_TX_SYS_CTRL3_REG, 0x34);
+	pr_info("%s %s : win_init %d, 0xDD %02x -> %02x, SYS_CTRL3 %02x -> %02x\n",
+		LOG_TAG, __func__, win_init, dd,
+		(win_init & 1) ? 0x83 : dd, c3, (win_init & 4) ? 0x34 : c3);
+}
+
 void sp_tx_initialization(void)
 {
 	sp_write_reg(TX_P0, AUX_CTRL2, 0x30);  /* xjh add set terminal reistor to 50ohm */
@@ -755,6 +782,7 @@ void sp_tx_initialization(void)
 		(~P5V_PROTECT_PD) & (~SHORT_PROTECT_PD));
 		*/
 	sp_write_reg_or(TX_P2, TX_ANALOG_DEBUG2, POWERON_TIME_1P5MS);/* ..................... */
+	sp_tx_win_init();
 	/*
 	sp_write_reg_or(TX_P0, TX_HDCP_CTRL0,
 	BKSV_SRM_PASS |KSVLIST_VLD);
@@ -2755,7 +2783,9 @@ void slimport_initialization(void)
 	sp_write_reg(TX_P1, FW_VER_REG, FW_VERSION);
 	/*disable OCM*/
 	sp_write_reg_or(TX_P1, OCM_REG3, OCM_RST);
-	vbus_power_ctrl(1);
+	/* the Windows driver never turns the SlimPort dongle 3.3 V on */
+	if (!(win_init & 2))
+		vbus_power_ctrl(1);
 	hdmi_rx_initialization();
 	sp_tx_initialization();
 	/*waiting for downstream to be stable,at least 200ms*/
