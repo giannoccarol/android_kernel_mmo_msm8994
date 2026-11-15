@@ -249,3 +249,19 @@ SIMs once the wrapper sends `setUiccSubscription` for each slot (without it
 qcril stayed in "init ongoing" and dropped the voice indications). Call audio
 on SIM 2 needs the second voice session, see the audio HAL patch of the
 manifest.
+
+Stack swap (15/11, RM-1116): when the data SIM moves to SIM 2, Android moves
+the LTE capability there too (`setRadioCapability`). qcril then binds rild 0
+to modem stack 1 and rild 1 to stack 0, saves it in
+`persist.radio.msim.stackid_0=1` / `stackid_1=0`, and opens the primary GW
+session on slot 2 and the secondary on slot 1. The helper used to send
+Subscription OK only for slot 1 on the primary session and slot 2 on the
+secondary, so after the next reboot both USIMs stayed in the personalization
+check and both SIMs had no service. Now an open session gets Subscription OK
+for the card its index names, in either slot, and an empty session gets the
+card of the slot whose rild is bound to that stack, after 5 s, so as not to
+race qcril, which opens the sessions itself. Recovery on a phone stuck that
+way: mobile data back to SIM 1, then
+`setprop persist.radio.msim.stackid_0 0`, `stackid_1 1`,
+`persist.radio.stack_id_0 0`, `stack_id_1 1` as root, and reboot.
+`test-uim-parse.py` has 28 checks, with the crossed layout of that phone.

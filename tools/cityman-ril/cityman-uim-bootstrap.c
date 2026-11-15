@@ -10,10 +10,13 @@
  * SIM-ready/radio-online transition.
  *
  * On a dual SIM phone (persist.radio.multisim.config=dsds, set at boot for
- * the RM-1116 and RM-1118) the card in the second slot gets the same two
- * steps on the secondary GW session and the secondary NAS subscription, and
- * the primary session is kept on the first slot, so that each slot matches
- * its rild instance and Android phone.
+ * the RM-1116 and RM-1118) the second card gets the same two steps on the
+ * secondary GW session and the secondary NAS subscription. Which card goes
+ * on which session follows qcril's binding of the rild instances to the
+ * modem stacks (persist.radio.msim.stackid_N): normally slot 1 on the
+ * primary session, but when Android moves the LTE stack to the data SIM
+ * (setRadioCapability) qcril binds rild 0 to stack 1 and moves the cards
+ * between the sessions, and so does this helper.
  *
  * It never enters a PIN, writes NV, forces DMS online, touches the SMD
  * device directly or logs card identifiers. Requests the modem rejects are
@@ -82,6 +85,12 @@
 #define POLL_RADIO_PENDING_S	5
 #define POLL_STABLE_S		30
 #define POLL_NO_USIM_S		10
+/*
+ * Dual SIM: qcril opens the sessions itself when it is asked to activate a
+ * subscription, and moves the cards between them on a stack swap. Open a
+ * session only after it has been empty this long, so as not to race it.
+ */
+#define DUAL_ACTIVATION_GRACE_S	5
 
 typedef int (*qmi_init_fn)(void *, unsigned int, void *, void *, void *,
 			   unsigned int, void **);
@@ -233,6 +242,46 @@ static int find_usim(const uint8_t *p, unsigned int n, unsigned int index_off,
 	return found;
 }
 
+/*
+ * Dual SIM: the USIM a GW session drives. While the session is open it is
+ * the application its index names, in whichever slot. While it is empty, the
+ * USIM in EXPECTED_SLOT, the slot whose rild instance is bound to that modem
+ * stack; if the other session (index at OTHER_OFF) still holds that card, as
+ * during a stack swap, the card in the other slot.
+ */
+static int find_session_usim(const uint8_t *p, unsigned int n,
+			     unsigned int index_off, unsigned int other_off,
+			     unsigned int expected_slot, unsigned int *gw_index,
+			     struct usim *out)
+{
+	unsigned int other;
+
+	if (n < 9)
+		return 0;
+	other = le16(p + other_off);
+	if (find_usim(p, n, index_off, -1, gw_index, out) &&
+	    *gw_index != SESSION_INDEX_NONE &&
+	    *gw_index == (out->slot << 8 | out->app))
+		return 1;
+	if (!find_usim(p, n, index_off, (int)expected_slot, gw_index, out))
+		return 0;
+	if (other != (out->slot << 8 | out->app))
+		return 1;
+	return find_usim(p, n, index_off, (int)!expected_slot, gw_index, out) &&
+	       other != (out->slot << 8 | out->app);
+}
+
+/*
+ * The slot (0-based) whose card belongs on the primary GW session: the one
+ * whose rild instance qcril bound to modem stack 0. qcril keeps the binding
+ * in persist.radio.msim.stackid_<instance> and swaps it when Android moves
+ * the LTE capability to the other SIM.
+ */
+static unsigned int primary_slot(void)
+{
+	return cityman_property_is("persist.radio.msim.stackid_0", "1") ? 1 : 0;
+}
+
 static int retry_due(struct retry *r, const char *what)
 {
 	if (r->tries >= MAX_RETRIES) {
@@ -268,12 +317,15 @@ static void retry_reset(struct retry *r)
  */
 static int provision(void *uim, unsigned int session, unsigned int gw_index,
 		     const struct usim *usim, struct retry *activation,
-		     struct retry *subscription, const char *name)
+		     struct retry *subscription, const char *name,
+		     int may_activate)
 {
 	char what[64];
 
 	if (gw_index == SESSION_INDEX_NONE &&
 	    usim->state == APP_STATE_DETECTED) {
+		if (!may_activate)
+			return 1;
 		/* TLV 0x01: session type, activate. TLV 0x10: slot, AID. */
 		uint8_t msg[10 + MAX_AID_LEN] = {
 			0x01, 2, 0, 0x00, 1,
@@ -418,7 +470,8 @@ int main(int argc, char **argv)
 	struct retry activation2 = { 0 }, subscription2 = { 0 };
 	int observe = 0, radio = 0, done = 1, dual;
 	int last_signature = -1, last_signature2 = -1, no_usim_logged = 0;
-	unsigned int failures = 0, attempt;
+	unsigned int failures = 0, attempt, pslot = 0, last_pslot = 0;
+	time_t empty_since = 0, empty_since2 = 0;
 
 	if (argc == 2 && !strcmp(argv[1], "--observe-only"))
 		observe = 1;
@@ -436,7 +489,7 @@ int main(int argc, char **argv)
 	}
 	dual = cityman_property_is("persist.radio.multisim.config", "dsds");
 	if (dual)
-		LOG("Dual SIM: second slot on the secondary GW session");
+		LOG("Dual SIM: GW sessions follow the modem stacks");
 
 	cci = dlopen("/vendor/lib64/libqmi_cci.so", RTLD_NOW | RTLD_GLOBAL);
 	services = dlopen("/vendor/lib64/libqmiservices.so",
@@ -477,7 +530,8 @@ int main(int argc, char **argv)
 		struct usim usim, usim2;
 		unsigned int n, gw_index, gw_index2 = SESSION_INDEX_NONE;
 		unsigned int poll, poll_ms = 0;
-		int signature, found2 = 0, pending2 = 0, ready2 = 0;
+		int signature, found2 = 0, pending2 = 0, ready2 = 0, found;
+		time_t now = now_s();
 
 		if (request(uim, QMI_UIM_GET_CARD_STATUS, NULL, 0)) {
 			/*
@@ -510,14 +564,27 @@ int main(int argc, char **argv)
 		failures = 0;
 
 		status = find_tlv(TLV_CARD_STATUS, &n);
+		if (dual) {
+			pslot = primary_slot();
+			if (pslot != last_pslot) {
+				LOG("Modem stacks %s: slot %u on the primary GW session",
+				    pslot ? "swapped" : "in order", pslot + 1);
+				last_pslot = pslot;
+			}
+		}
 		if (status && dual) {
-			found2 = find_usim(status, n, 4, 1, &gw_index2, &usim2);
+			found2 = find_session_usim(status, n, 4, 0, !pslot,
+						   &gw_index2, &usim2);
+			if (gw_index2 != SESSION_INDEX_NONE)
+				empty_since2 = 0;
+			else if (!empty_since2)
+				empty_since2 = now;
 			if (found2) {
 				int s2 = usim2.state | usim2.pin1 << 8 |
-					 usim2.perso << 16;
+					 usim2.perso << 16 | usim2.slot << 24;
 
 				if (s2 != last_signature2) {
-					LOG("Second USIM slot %u app %u: state=%u PIN-state=%u personalization=%u",
+					LOG("Secondary session USIM slot %u app %u: state=%u PIN-state=%u personalization=%u",
 					    usim2.slot + 1, usim2.app, usim2.state,
 					    usim2.pin1, usim2.perso);
 					last_signature2 = s2;
@@ -530,11 +597,23 @@ int main(int argc, char **argv)
 							     gw_index2, &usim2,
 							     &activation2,
 							     &subscription2,
-							     "Secondary");
+							     "Secondary",
+							     now - empty_since2 >=
+							     DUAL_ACTIVATION_GRACE_S);
 			}
 		}
-		if (!status ||
-		    !find_usim(status, n, 0, dual ? 0 : -1, &gw_index, &usim)) {
+		found = status && (dual ?
+			find_session_usim(status, n, 0, 4, pslot, &gw_index, &usim) :
+			find_usim(status, n, 0, -1, &gw_index, &usim));
+		/* Both sessions on one card cannot happen; never act twice on it. */
+		if (found && found2 && usim.slot == usim2.slot &&
+		    usim.app == usim2.app)
+			found = 0;
+		if (dual && found && gw_index != SESSION_INDEX_NONE)
+			empty_since = 0;
+		else if (dual && !empty_since)
+			empty_since = now;
+		if (!found) {
 			if (!no_usim_logged) {
 				LOG("No present USIM application");
 				no_usim_logged = 1;
@@ -555,7 +634,8 @@ int main(int argc, char **argv)
 		}
 		no_usim_logged = 0;
 
-		signature = usim.state | usim.pin1 << 8 | usim.perso << 16;
+		signature = usim.state | usim.pin1 << 8 | usim.perso << 16 |
+			    usim.slot << 24;
 		if (signature != last_signature) {
 			LOG("USIM slot %u app %u: state=%u PIN-state=%u personalization=%u",
 			    usim.slot + 1, usim.app, usim.state, usim.pin1,
@@ -588,7 +668,8 @@ int main(int argc, char **argv)
 		}
 
 		provision(uim, SESSION_PRIMARY_GW, gw_index, &usim, &activation,
-			  &subscription, "Primary");
+			  &subscription, "Primary",
+			  !dual || now - empty_since >= DUAL_ACTIVATION_GRACE_S);
 		/* PIN- and PUK-required states are only observed; the user handles them. */
 		poll = 0;
 		poll_ms = (usim.state == APP_STATE_PIN_REQUIRED ||
