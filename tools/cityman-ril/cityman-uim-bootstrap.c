@@ -9,6 +9,12 @@
  * --activate-radio, enables the primary NAS subscription once per
  * SIM-ready/radio-online transition.
  *
+ * On a dual SIM phone (persist.radio.multisim.config=dsds, set at boot for
+ * the RM-1116 and RM-1118) the card in the second slot gets the same two
+ * steps on the secondary GW session and the secondary NAS subscription, and
+ * the primary session is kept on the first slot, so that each slot matches
+ * its rild instance and Android phone.
+ *
  * It never enters a PIN, writes NV, forces DMS online, touches the SMD
  * device directly or logs card identifiers. Requests the modem rejects are
  * retried a few times with backoff and then only observed: re-sending the
@@ -58,7 +64,10 @@
 #define PIN_STATE_DISABLED	3
 #define DMS_MODE_ONLINE		0
 #define SESSION_INDEX_NONE	0xffff
+#define SESSION_PRIMARY_GW	0x00
+#define SESSION_SECONDARY_GW	0x02
 #define SUBS_PRIMARY		0x01
+#define SUBS_SECONDARY		0x02
 
 #define MAX_AID_LEN		32
 #define MAX_RETRIES		3
@@ -162,10 +171,12 @@ static int request(void *client, unsigned int msg, const void *data,
 }
 
 /*
- * Walk the card status TLV and pick the USIM application that drives the
- * primary GW session: the one index_gw_pri names if it is a USIM, else the
- * first USIM on the first present card. Multi-app cards (USIM + ISIM/CSIM)
- * and dual-SIM layouts are handled; returns 1 when a USIM was found.
+ * Walk the card status TLV and pick the USIM application that drives a GW
+ * session: the one the session index names (index_gw_pri at INDEX_OFF 0,
+ * index_gw_sec at 4) if it is a USIM, else the first USIM on the first
+ * present card. SLOT_ONLY >= 0 limits the search to that slot (dual SIM).
+ * Multi-app cards (USIM + ISIM/CSIM) are handled; returns 1 when a USIM was
+ * found.
  *
  * TLV 0x10 layout: index_gw_pri, index_1x_pri, index_gw_sec, index_1x_sec
  * (u16 each, slot << 8 | app, 0xffff = none), num_slots, then per slot:
@@ -174,14 +185,14 @@ static int request(void *client, unsigned int msg, const void *data,
  * perso_unblock_retries, aid_len, aid[], univ_pin, pin1_state, pin1_retries,
  * puk1_retries, pin2_state, pin2_retries, puk2_retries.
  */
-static int find_usim(const uint8_t *p, unsigned int n, unsigned int *gw_index,
-		     struct usim *out)
+static int find_usim(const uint8_t *p, unsigned int n, unsigned int index_off,
+		     int slot_only, unsigned int *gw_index, struct usim *out)
 {
 	unsigned int off = 9, slots, slot, found = 0;
 
 	if (n < 9)
 		return 0;
-	*gw_index = le16(p);
+	*gw_index = le16(p + index_off);
 	slots = p[8];
 
 	for (slot = 0; slot < slots; slot++) {
@@ -205,6 +216,7 @@ static int find_usim(const uint8_t *p, unsigned int n, unsigned int *gw_index,
 
 			if (card_state == CARD_STATE_PRESENT &&
 			    type == APP_TYPE_USIM &&
+			    (slot_only < 0 || slot == (unsigned int)slot_only) &&
 			    (!found || *gw_index == (slot << 8 | app))) {
 				out->slot = slot;
 				out->app = app;
@@ -248,9 +260,149 @@ static void retry_reset(struct retry *r)
 	memset(r, 0, sizeof(*r));
 }
 
+/*
+ * The two provisioning steps the Windows modem waits for, on one GW session:
+ * open the session for a DETECTED USIM, then, once the PIN is verified or
+ * disabled and personalization is ready, send Subscription OK. Returns 1
+ * while a step is still pending (poll fast), 0 when nothing is left to do.
+ */
+static int provision(void *uim, unsigned int session, unsigned int gw_index,
+		     const struct usim *usim, struct retry *activation,
+		     struct retry *subscription, const char *name)
+{
+	char what[64];
+
+	if (gw_index == SESSION_INDEX_NONE &&
+	    usim->state == APP_STATE_DETECTED) {
+		/* TLV 0x01: session type, activate. TLV 0x10: slot, AID. */
+		uint8_t msg[10 + MAX_AID_LEN] = {
+			0x01, 2, 0, 0x00, 1,
+			0x10, 0, 0, 0, 0,
+		};
+
+		snprintf(what, sizeof(what), "%s GW USIM activation", name);
+		if (!usim->aid_len) {
+			LOG("%s USIM without application identifier; no activation",
+			    name);
+		} else if (retry_due(activation, what)) {
+			msg[3] = session;
+			msg[6] = usim->aid_len + 2;
+			msg[8] = usim->slot + 1;
+			msg[9] = usim->aid_len;
+			memcpy(msg + 10, usim->aid, usim->aid_len);
+			if (!request(uim, QMI_UIM_CHANGE_PROVISIONING_SESSION,
+				     msg, 10 + usim->aid_len))
+				LOG("%s GW USIM activated", name);
+			else
+				retry_failed(activation);
+		}
+		return 1;
+	}
+	if (gw_index == (usim->slot << 8 | usim->app) &&
+	    usim->state == APP_STATE_PERSO_CHECK &&
+	    usim->perso == PERSO_STATE_READY &&
+	    (usim->pin1 == PIN_STATE_VERIFIED ||
+	     usim->pin1 == PIN_STATE_DISABLED)) {
+		/*
+		 * Publish only after PIN verification/disablement and
+		 * personalization ready. TLV 0x01: session type, no AID.
+		 * TLV 0x02: OK for subscription.
+		 */
+		uint8_t ok[] = { 0x01, 2, 0, 0x00, 0, 0x02, 1, 0, 1 };
+
+		ok[3] = session;
+		snprintf(what, sizeof(what), "%s Subscription OK", name);
+		if (retry_due(subscription, what)) {
+			if (!request(uim, QMI_UIM_SUBSCRIPTION_OK, ok,
+				     sizeof(ok)))
+				LOG("%s GW Subscription OK accepted", name);
+			else
+				retry_failed(subscription);
+		}
+		return 1;
+	}
+	return usim->state != APP_STATE_READY;
+}
+
 static int open_client(void *object, void *params, void **client)
 {
 	return qmi_init(object, 0xffff, NULL, NULL, params, 8000, client);
+}
+
+/* The NAS and DMS clients used to enable the radio subscriptions. */
+struct radio {
+	void *nas, *dms, *nas_object, *dms_object, *nas_params, *dms_params;
+	unsigned int attempted;		/* mask last tried while online */
+};
+
+static void release_radio(struct radio *r)
+{
+	if (r->nas) {
+		qmi_release(r->nas);
+		r->nas = NULL;
+	}
+	if (r->dms) {
+		qmi_release(r->dms);
+		r->dms = NULL;
+	}
+	r->attempted = 0;
+}
+
+/*
+ * Enable the NAS subscriptions in WANT once the modem is online, following
+ * Android's radio power decision (DMS is never forced online): one attempt
+ * per change of WANT or of the online state, not a loop. Returns the poll
+ * interval in seconds.
+ */
+static unsigned int activate_radio(struct radio *r, unsigned int want)
+{
+	const uint8_t *mode, *mask;
+	uint8_t active[11] = { TLV_SET_ACTIVE_SUBS, 8, 0 };
+	unsigned int n;
+
+	if (!r->dms && open_client(r->dms_object, r->dms_params, &r->dms)) {
+		r->dms = NULL;
+		return POLL_RADIO_PENDING_S;
+	}
+	if (!r->nas && open_client(r->nas_object, r->nas_params, &r->nas)) {
+		r->nas = NULL;
+		return POLL_RADIO_PENDING_S;
+	}
+	if (request(r->dms, QMI_DMS_GET_OPERATING_MODE, NULL, 0))
+		goto drop;
+	mode = find_tlv(TLV_OPERATING_MODE, &n);
+	if (!mode || n != 1)
+		goto drop;
+	if (*mode != DMS_MODE_ONLINE) {
+		r->attempted = 0;
+		return POLL_STABLE_S;
+	}
+	if (r->attempted == want)
+		return POLL_STABLE_S;
+
+	r->attempted = want;
+	if (request(r->nas, QMI_NAS_GET_ACTIVE_SUBSCRIPTIONS, NULL, 0))
+		goto drop;
+	mask = find_tlv(TLV_GET_ACTIVE_SUBS, &n);
+	if (!mask || n != 8)
+		goto drop;
+	memcpy(active + 3, mask, 8);
+	if ((active[3] & want) != want) {
+		active[3] |= want;
+		if (!request(r->nas, QMI_NAS_SET_ACTIVE_SUBSCRIPTIONS, active,
+			     sizeof(active)))
+			LOG("%s radio subscription%s enabled",
+			    want == SUBS_PRIMARY ? "Primary" :
+			    want == SUBS_SECONDARY ? "Secondary" :
+			    "Primary and secondary",
+			    want == (SUBS_PRIMARY | SUBS_SECONDARY) ? "s" : "");
+	}
+	return POLL_STABLE_S;
+
+drop:
+	/* Usually a modem restart: reopen the clients next round. */
+	release_radio(r);
+	return POLL_RADIO_PENDING_S;
 }
 
 int main(int argc, char **argv)
@@ -260,10 +412,12 @@ int main(int argc, char **argv)
 		uint8_t bytes[1024];
 	} params[3] = { 0 };
 	void *cci, *services, *uim_object, *nas_object, *dms_object;
-	void *uim = NULL, *nas = NULL, *dms = NULL;
+	void *uim = NULL;
+	struct radio r = { 0 };
 	struct retry activation = { 0 }, subscription = { 0 };
-	int observe = 0, radio = 0, done = 1, radio_attempted = 0;
-	int last_signature = -1, no_usim_logged = 0;
+	struct retry activation2 = { 0 }, subscription2 = { 0 };
+	int observe = 0, radio = 0, done = 1, dual;
+	int last_signature = -1, last_signature2 = -1, no_usim_logged = 0;
 	unsigned int failures = 0, attempt;
 
 	if (argc == 2 && !strcmp(argv[1], "--observe-only"))
@@ -280,6 +434,9 @@ int main(int argc, char **argv)
 		LOG("Unsupported device; no QMI changes");
 		return 1;
 	}
+	dual = cityman_property_is("persist.radio.multisim.config", "dsds");
+	if (dual)
+		LOG("Dual SIM: second slot on the secondary GW session");
 
 	cci = dlopen("/vendor/lib64/libqmi_cci.so", RTLD_NOW | RTLD_GLOBAL);
 	services = dlopen("/vendor/lib64/libqmiservices.so",
@@ -299,6 +456,10 @@ int main(int argc, char **argv)
 		LOG("Vendor QMI symbols missing");
 		return 1;
 	}
+	r.nas_object = nas_object;
+	r.dms_object = dms_object;
+	r.dms_params = &params[1];
+	r.nas_params = &params[2];
 
 	for (attempt = 0; attempt < 30; attempt++) {
 		int ret = open_client(uim_object, &params[0], &uim);
@@ -313,9 +474,10 @@ int main(int argc, char **argv)
 
 	for (;;) {
 		const uint8_t *status;
-		struct usim usim;
-		unsigned int n, gw_index, poll, poll_ms = 0;
-		int signature;
+		struct usim usim, usim2;
+		unsigned int n, gw_index, gw_index2 = SESSION_INDEX_NONE;
+		unsigned int poll, poll_ms = 0;
+		int signature, found2 = 0, pending2 = 0, ready2 = 0;
 
 		if (request(uim, QMI_UIM_GET_CARD_STATUS, NULL, 0)) {
 			/*
@@ -348,14 +510,47 @@ int main(int argc, char **argv)
 		failures = 0;
 
 		status = find_tlv(TLV_CARD_STATUS, &n);
-		if (!status || !find_usim(status, n, &gw_index, &usim)) {
+		if (status && dual) {
+			found2 = find_usim(status, n, 4, 1, &gw_index2, &usim2);
+			if (found2) {
+				int s2 = usim2.state | usim2.pin1 << 8 |
+					 usim2.perso << 16;
+
+				if (s2 != last_signature2) {
+					LOG("Second USIM slot %u app %u: state=%u PIN-state=%u personalization=%u",
+					    usim2.slot + 1, usim2.app, usim2.state,
+					    usim2.pin1, usim2.perso);
+					last_signature2 = s2;
+					retry_reset(&activation2);
+					retry_reset(&subscription2);
+				}
+				ready2 = usim2.state == APP_STATE_READY;
+				if (!observe)
+					pending2 = provision(uim, SESSION_SECONDARY_GW,
+							     gw_index2, &usim2,
+							     &activation2,
+							     &subscription2,
+							     "Secondary");
+			}
+		}
+		if (!status ||
+		    !find_usim(status, n, 0, dual ? 0 : -1, &gw_index, &usim)) {
 			if (!no_usim_logged) {
 				LOG("No present USIM application");
 				no_usim_logged = 1;
 			}
 			if (observe)
 				break;
-			sleep(POLL_NO_USIM_S);
+			/* Dual SIM with a card in the second slot only. */
+			poll = POLL_NO_USIM_S;
+			if (radio && ready2)
+				poll = activate_radio(&r, SUBS_SECONDARY);
+			else
+				release_radio(&r);
+			if (pending2)
+				usleep(POLL_TRANSITION_MS * 1000);
+			else
+				sleep(poll);
 			continue;
 		}
 		no_usim_logged = 0;
@@ -374,138 +569,44 @@ int main(int argc, char **argv)
 		}
 
 		if (usim.state == APP_STATE_READY) {
-			const uint8_t *mode, *mask;
-			uint8_t active[11] = { TLV_SET_ACTIVE_SUBS, 8, 0 };
-
 			if (!radio) {
 				done = 0;
 				break;
 			}
-			poll = POLL_RADIO_PENDING_S;
-			if (!dms && open_client(dms_object, &params[1], &dms))
-				goto next;
-			if (!nas && open_client(nas_object, &params[2], &nas))
-				goto next;
-
-			/* Follow Android's radio power decision; never force DMS online. */
-			if (request(dms, QMI_DMS_GET_OPERATING_MODE, NULL, 0))
-				goto drop_radio_clients;
-			mode = find_tlv(TLV_OPERATING_MODE, &n);
-			if (!mode || n != 1)
-				goto drop_radio_clients;
-			if (*mode != DMS_MODE_ONLINE) {
-				radio_attempted = 0;
-				poll = POLL_STABLE_S;
-				goto next;
-			}
-			if (radio_attempted) {
-				poll = POLL_STABLE_S;
-				goto next;
-			}
-
-			/* One activation per ready/online transition, not a loop. */
-			radio_attempted = 1;
-			if (request(nas, QMI_NAS_GET_ACTIVE_SUBSCRIPTIONS, NULL, 0))
-				goto drop_radio_clients;
-			mask = find_tlv(TLV_GET_ACTIVE_SUBS, &n);
-			if (!mask || n != 8)
-				goto drop_radio_clients;
-			memcpy(active + 3, mask, 8);
-			if (!(active[3] & SUBS_PRIMARY)) {
-				active[3] |= SUBS_PRIMARY;
-				if (!request(nas, QMI_NAS_SET_ACTIVE_SUBSCRIPTIONS,
-					     active, sizeof(active)))
-					LOG("Primary radio subscription enabled");
-			}
-			poll = POLL_STABLE_S;
-			goto next;
-
-drop_radio_clients:
-			/* Usually a modem restart: reopen the clients next round. */
-			if (nas) {
-				qmi_release(nas);
-				nas = NULL;
-			}
-			if (dms) {
-				qmi_release(dms);
-				dms = NULL;
-			}
-			radio_attempted = 0;
+			poll = activate_radio(&r, SUBS_PRIMARY |
+						  (ready2 ? SUBS_SECONDARY : 0));
 			goto next;
 		}
 
-		if (nas) {
-			qmi_release(nas);
-			nas = NULL;
-		}
-		if (dms) {
-			qmi_release(dms);
-			dms = NULL;
-		}
-		radio_attempted = 0;
+		if (radio && ready2)
+			activate_radio(&r, SUBS_SECONDARY);
+		else
+			release_radio(&r);
 		if (observe) {
 			done = 0;
 			break;
 		}
 
-		if (gw_index == SESSION_INDEX_NONE &&
-		    usim.state == APP_STATE_DETECTED) {
-			/* TLV 0x01: primary GW session, activate. TLV 0x10: slot, AID. */
-			uint8_t msg[10 + MAX_AID_LEN] = {
-				0x01, 2, 0, 0x00, 1,
-				0x10, 0, 0, 0, 0,
-			};
-
-			if (!usim.aid_len) {
-				LOG("USIM without application identifier; no activation");
-			} else if (retry_due(&activation, "Primary GW USIM activation")) {
-				msg[6] = usim.aid_len + 2;
-				msg[8] = usim.slot + 1;
-				msg[9] = usim.aid_len;
-				memcpy(msg + 10, usim.aid, usim.aid_len);
-				if (!request(uim, QMI_UIM_CHANGE_PROVISIONING_SESSION,
-					     msg, 10 + usim.aid_len))
-					LOG("Primary GW USIM activated");
-				else
-					retry_failed(&activation);
-			}
-		} else if (gw_index == (usim.slot << 8 | usim.app) &&
-			   usim.state == APP_STATE_PERSO_CHECK &&
-			   usim.perso == PERSO_STATE_READY &&
-			   (usim.pin1 == PIN_STATE_VERIFIED ||
-			    usim.pin1 == PIN_STATE_DISABLED)) {
-			/*
-			 * Publish only after PIN verification/disablement and
-			 * personalization ready. TLV 0x01: primary GW session,
-			 * no AID. TLV 0x02: OK for subscription.
-			 */
-			static const uint8_t ok[] = { 0x01, 2, 0, 0x00, 0,
-						      0x02, 1, 0, 1 };
-
-			if (retry_due(&subscription, "Subscription OK")) {
-				if (!request(uim, QMI_UIM_SUBSCRIPTION_OK, ok,
-					     sizeof(ok)))
-					LOG("Primary GW Subscription OK accepted");
-				else
-					retry_failed(&subscription);
-			}
-		}
+		provision(uim, SESSION_PRIMARY_GW, gw_index, &usim, &activation,
+			  &subscription, "Primary");
 		/* PIN- and PUK-required states are only observed; the user handles them. */
 		poll = 0;
 		poll_ms = (usim.state == APP_STATE_PIN_REQUIRED ||
 			   usim.state == APP_STATE_PUK_REQUIRED) ?
 			  POLL_PIN_MS : POLL_TRANSITION_MS;
 next:
+		if (pending2 && poll) {
+			/* The second SIM is starting: do not wait 5-30 s. */
+			poll = 0;
+			poll_ms = POLL_TRANSITION_MS;
+		}
 		if (poll)
 			sleep(poll);
 		else
 			usleep(poll_ms * 1000);
 	}
 
-	if (nas)
-		qmi_release(nas);
-	if (dms)
-		qmi_release(dms);
+	release_radio(&r);
 	if (uim)
 		qmi_release(uim);
 	return done;

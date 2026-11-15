@@ -213,3 +213,25 @@ not change the external card state for that app state, so the card stays
 the PIN screen back until READY arrived. With the old 5 s PIN poll the helper
 sent Subscription OK about 2 s after the PIN. The fast poll above closes that
 window; still to be confirmed on the phone.
+
+## Dual SIM (2026-11-15, not yet tested on a phone)
+
+The Lumia 950 XL Dual SIM (RM-1116) reports both cards in the card status
+(two slots, hot swap and SIM busy arrays of two entries). The first USIM was
+READY on the primary GW session, the second stayed DETECTED with no secondary
+GW session (`index_gw_sec` 0xffff): the Windows modem waits for a client to
+open that session too, as it does for the first one.
+
+With `persist.radio.multisim.config=dsds` (set at boot by the device tree for
+the RM-1116 and RM-1118) the helper:
+
+- keeps the primary GW session on the first slot and opens the secondary GW
+  session (QMI UIM session type 2) for the USIM in the second slot, with the
+  same retry limits; Subscription OK is sent on that session after the PIN;
+- enables the secondary NAS subscription (mask bit 0x02) next to the primary
+  one when the second USIM is READY, also when only the second slot has a card;
+- polls fast while the second card is starting.
+
+Single SIM phones (property empty) behave as before. Host tests:
+`test-uim-parse.py` now has 15 parser checks, including the RM-1116 layout.
+The QMI exchanges on the second session are not tested.

@@ -20,12 +20,19 @@ def slot(present, apps):
     return bytes([1 if present else 0, 0, 0, 0, 0, len(apps)]) + b''.join(apps)
 
 
-def status(gw_index, slots):
-    return struct.pack('<4HB', gw_index, 0xFFFF, 0xFFFF, 0xFFFF, len(slots)) + b''.join(slots)
+def status(gw_index, slots, gw_sec=0xFFFF):
+    return struct.pack('<4HB', gw_index, 0xFFFF, gw_sec, 0xFFFF, len(slots)) + b''.join(slots)
+
+
+# Dual SIM layout as an RM-1116 reports it (both cards present, the first USIM
+# ready on the primary session, the second DETECTED with no secondary session),
+# with placeholder AIDs.
+DUAL = status(0x0000, [slot(True, [app(2, 7, pin1=3)]), slot(True, [app(2, 1, perso=0, pin1=0)])])
+SECOND_ONLY = status(0xFFFF, [slot(False, []), slot(True, [app(2, 1)])])
 
 
 CASES = [
-    # label, tlv, expected (found, slot, app, state, pin1)
+    # label, tlv, expected (found, slot, app, state, pin1)[, index_off, slot_only]
     ("single USIM", status(0xFFFF, [slot(True, [app(2, 1)])]), (1, 0, 0, 1, 2)),
     ("USIM + ISIM", status(0x0000, [slot(True, [app(2, 7), app(5, 1)])]), (1, 0, 0, 7, 2)),
     ("ISIM before USIM", status(0xFFFF, [slot(True, [app(5, 1), app(2, 2, pin1=1)])]), (1, 0, 1, 2, 1)),
@@ -35,10 +42,20 @@ CASES = [
     ("card absent", status(0xFFFF, [slot(False, [app(2, 1)])]), (0,)),
     ("truncated", status(0xFFFF, [slot(True, [app(2, 1)])])[:20], (0,)),
     ("oversized AID", status(0xFFFF, [slot(True, [app(2, 1, aid=bytes(33))])]), (0,)),
+    ("dual SIM: primary on slot 1", DUAL, (1, 0, 0, 7, 3), 0, 0),
+    ("dual SIM: secondary on slot 2", DUAL, (1, 1, 0, 1, 0), 4, 1),
+    ("dual SIM: secondary index names slot 2",
+     status(0x0000, [slot(True, [app(2, 7)]), slot(True, [app(5, 1), app(2, 4)])], gw_sec=0x0101),
+     (1, 1, 1, 4, 2), 4, 1),
+    ("dual SIM, card in slot 2 only: no primary", SECOND_ONLY, (0,), 0, 0),
+    ("dual SIM, card in slot 2 only: secondary", SECOND_ONLY, (1, 1, 0, 1, 2), 4, 1),
+    ("dual SIM, card in slot 1 only: no secondary",
+     status(0x0000, [slot(True, [app(2, 7)]), slot(False, [])]), (0,), 4, 1),
 ]
 
 DRIVER = r'''
 #include <stdio.h>
+#include <stdlib.h>
 #define main helper_main
 #include "cityman-uim-bootstrap.c"
 #undef main
@@ -50,8 +67,9 @@ int main(int argc, char **argv)
 	size_t n = fread(buf, 1, sizeof(buf), stdin);
 	struct usim u;
 	unsigned int gw;
-	(void)argc; (void)argv;
-	if (!find_usim(buf, n, &gw, &u)) { puts("0"); return 0; }
+	unsigned int off = argc > 1 ? (unsigned int)atoi(argv[1]) : 0;
+	int only = argc > 2 ? atoi(argv[2]) : -1;
+	if (!find_usim(buf, n, off, only, &gw, &u)) { puts("0"); return 0; }
 	printf("1 %u %u %u %u\n", u.slot, u.app, u.state, u.pin1);
 	return 0;
 }
@@ -75,8 +93,10 @@ def main():
         subprocess.run(["cc", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
                         "-I", str(work / "include"), "-I", str(source),
                         str(work / "driver.c"), "-ldl", "-o", str(exe)], check=True)
-        for label, tlv, expected in CASES:
-            out = subprocess.run([str(exe)], input=tlv, capture_output=True, check=True).stdout
+        for label, tlv, expected, *args in CASES:
+            off, only = args if args else (0, -1)
+            out = subprocess.run([str(exe), str(off), str(only)], input=tlv,
+                                 capture_output=True, check=True).stdout
             got = tuple(int(x) for x in out.split())
             assert got == expected, (label, got, expected)
             print(f"PASS: {label}")
