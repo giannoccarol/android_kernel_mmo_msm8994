@@ -20,9 +20,11 @@ mkdir -p -- "$output_dir"
   -o "$output_dir/cityman-ims-profile"
 "$compiler" -Os -Wall -Wextra -Werror \
   "$source_dir/qmi-client-query.c" -ldl -o "$output_dir/qmi-client-query"
+"$compiler" -Os -Wall -Wextra -Werror \
+  "$source_dir/qmi-ind-dump.c" -ldl -o "$output_dir/qmi-ind-dump"
 cp -- "$source_dir/cityman-uim-bootstrap.rc" "$output_dir/"
 cp -- "$source_dir/cityman-ims-profile.rc" "$output_dir/"
 sha256sum -- "$output_dir/libcityman_ds_target.so" \
   "$output_dir/libcityman_ril_init.so" \
   "$output_dir/cityman-uim-bootstrap" "$output_dir/cityman-ims-profile" \
-  "$output_dir/qmi-client-query"
+  "$output_dir/qmi-client-query" "$output_dir/qmi-ind-dump"

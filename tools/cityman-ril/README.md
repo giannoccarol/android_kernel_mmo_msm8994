@@ -153,6 +153,13 @@ unverified.
 keep one client open and poll a second request on that same client. Polling is
 bounded and stops on an API error; no retrying radio activation loop is provided.
 
+`qmi-ind-dump SERVICE_OBJECT SECONDS [MSG_ID [REQ_ID REQ_TLV_HEX]]` prints the
+raw indications of one service for a number of seconds, without decoding them
+(for example `voice_qmi_idl_service_object_v02 60 0x2e` for the call state).
+It showed that the modem sent every call state while qcril logged "Indication
+decode failed": qcril was dropping them, not failing to decode them. The
+payload can contain phone numbers: keep the output private.
+
 The pmOS implementation is a reference for the firmware sequence, not a
 replacement for Android's transport or data stack:
 
@@ -235,3 +242,10 @@ the RM-1116 and RM-1118) the helper:
 Single SIM phones (property empty) behave as before. Host tests:
 `test-uim-parse.py` now has 15 parser checks, including the RM-1116 layout.
 The QMI exchanges on the second session are not tested.
+
+Tested on 15/11 on an RM-1116 (build 81 plus the radio wrapper of device
+`06c11af` by bind mount): both cards LOADED, incoming and outgoing calls on both
+SIMs once the wrapper sends `setUiccSubscription` for each slot (without it
+qcril stayed in "init ongoing" and dropped the voice indications). Call audio
+on SIM 2 needs the second voice session, see the audio HAL patch of the
+manifest.
