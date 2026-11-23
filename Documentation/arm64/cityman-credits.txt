@@ -114,6 +114,8 @@ USB-C video path (test branches test/cityman-usbc-probe, -anx7816, -uc120)
   the register use, calibration and the PD / DisplayPort alternate mode
   sequence of the Microsoft ice5lp_2k.sys and tyc.dll binaries of the
   Lumia driver package, collected by the LumiaWoA community.
+- The LumiaWoA authors: the rebuilt TypeCMux mux driver, the reference for
+  the map from mux commands to GPIOs used by the UC120 driver.
 
 Not in this branch
 ------------------

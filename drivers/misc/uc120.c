@@ -13,6 +13,14 @@
  * Register access: one SPI frame per access, command byte reg << 3 | write;
  * a read returns the value in the third byte of a three byte frame.
  *
+ * Credits: Bingxing Wang (imbushuo) and Gustave Monce (gus33), WOA-Project
+ * Ice5Lp2k (github.com/WOA-Project/Ice5Lp2k, 7f1d597), the PHY driver
+ * reimplementation that was studied next to the original binary.
+ * Googulator, WOA-Project LumiaUSBC (github.com/WOA-Project/LumiaUSBC,
+ * 4abe9b5): SPI register access, init, calibration and mux GPIO roles.
+ * The LumiaWoA authors: the rebuilt TypeCMux driver, for the mux commands.
+ * Full list in Documentation/arm64/cityman-credits.txt.
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
  * only version 2 as published by the Free Software Foundation.
