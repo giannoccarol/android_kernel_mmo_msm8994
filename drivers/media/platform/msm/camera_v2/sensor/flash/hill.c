@@ -4,6 +4,11 @@
  * Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
  * Register map recovered from this phone's own Windows Phone driver.
  *
+ * Credits: hraj9258 (Himanshu Raj,
+ * github.com/hraj9258/android_kernel_mmo_msm8994, talkman-cam-clean, bb9466c):
+ * the Hill register map and the LED class torch.
+ * Full list in Documentation/arm64/cityman-credits.txt.
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
  * only version 2 as published by the Free Software Foundation.
