@@ -1,0 +1,99 @@
+name: Build kernel (Lumia 950 / 950 XL)
+
+on:
+  push:
+    branches: [lineage-23-cityman]
+  workflow_dispatch:
+    inputs:
+      defconfig:
+        description: "Defconfig to build"
+        default: "mmo_defconfig"
+      modules:
+        description: "Also build and collect kernel modules"
+        type: boolean
+        default: false
+
+env:
+  ARCH: arm64
+  CROSS_COMPILE: ${{ github.workspace }}/toolchain/bin/aarch64-linux-android-
+  DEFCONFIG: ${{ inputs.defconfig || 'mmo_defconfig' }}
+  # Tested toolchain commit (GCC 4.9, Feb 2020 backup of the AOSP prebuilt)
+  TOOLCHAIN_REPO: kindle4jerry/aarch64-linux-android-4.9-bakup
+  TOOLCHAIN_REF: 5797d7f622321e734558bd3372a9ab5ad6e6a48e
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout kernel
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Cache toolchain
+        id: tc-cache
+        uses: actions/cache@v4
+        with:
+          path: toolchain
+          key: gcc49-${{ env.TOOLCHAIN_REF }}
+
+      - name: Fetch toolchain
+        if: steps.tc-cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TOOLCHAIN_REPO }}
+          ref: ${{ env.TOOLCHAIN_REF }}
+          path: toolchain
+
+      - name: Install host packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bc bison flex ccache zip libssl-dev
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: ccache-${{ github.ref_name }}-
+
+      - name: Toolchain version
+        run: ${CROSS_COMPILE}gcc --version | head -1
+
+      - name: Configure
+        run: |
+          ccache --max-size=2G
+          make $DEFCONFIG
+          grep -E 'CONFIG_BUILD_ARM64_APPENDED_(DTB|KERNEL)' .config
+
+      # -fcommon: 3.10's dtc/kconfig host tools fail to link with gcc >= 10 otherwise
+      - name: Build kernel + appended dtbs
+        run: |
+          make -j"$(nproc)" HOSTCFLAGS="-fcommon" \
+               CC="ccache ${CROSS_COMPILE}gcc" Image.gz-dtb dtbs
+
+      - name: Build modules
+        if: ${{ inputs.modules }}
+        run: |
+          make -j"$(nproc)" HOSTCFLAGS="-fcommon" \
+               CC="ccache ${CROSS_COMPILE}gcc" modules
+          make HOSTCFLAGS="-fcommon" modules_install \
+               INSTALL_MOD_PATH="$PWD/out/modules" INSTALL_MOD_STRIP=1
+
+      - name: Collect output
+        run: |
+          mkdir -p out
+          cp arch/arm64/boot/Image.gz-dtb out/
+          cp arch/arm64/boot/Image.gz out/ 2>/dev/null || true
+          cp arch/arm64/boot/dts/*.dtb out/
+          cp .config out/config
+          (cd out && sha256sum Image.gz-dtb *.dtb > SHA256SUMS && cat SHA256SUMS)
+          ccache -s
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ github.sha }}
+          path: out/
+          if-no-files-found: error
