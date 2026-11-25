@@ -236,6 +236,12 @@ static ssize_t synaptics_rmi4_wake_tune_store(struct device *dev,
 static ssize_t synaptics_rmi4_wake_stats_show(struct device *dev,
 		struct device_attribute *attr, char *buf);
 
+static ssize_t synaptics_rmi4_interactive_show(struct device *dev,
+		struct device_attribute *attr, char *buf);
+
+static ssize_t synaptics_rmi4_interactive_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count);
+
 static int synaptics_rmi4_capacitance_button_map(
 				struct synaptics_rmi4_data *rmi4_data,
 				struct synaptics_rmi4_fn *fhandler);
@@ -516,6 +522,9 @@ static struct device_attribute attrs[] = {
 	__ATTR(wake_stats, S_IRUGO,
 			synaptics_rmi4_wake_stats_show,
 			synaptics_rmi4_store_error),
+	__ATTR(interactive, (S_IRUGO | S_IWUSR | S_IWGRP),
+			synaptics_rmi4_interactive_show,
+			synaptics_rmi4_interactive_store),
 #if defined(CONFIG_SECURE_TOUCH)
 	__ATTR(secure_touch_enable, (S_IRUGO | S_IWUSR | S_IWGRP),
 			synaptics_secure_touch_enable_show,
@@ -1124,6 +1133,46 @@ static ssize_t synaptics_rmi4_wake_tune_store(struct device *dev,
 	mutex_unlock(&rmi4_data->pm_mutex);
 
 	return retval;
+}
+
+static ssize_t synaptics_rmi4_interactive_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%u\n", rmi4_data->interactive);
+}
+
+/*
+ * The power HAL writes 0 when Android stops being interactive and 1 when
+ * it is again. With the always-on display, Android keeps the display on at
+ * zero brightness for about 4 s after the screen is turned off (doze
+ * transition) and the fb notifier sees an unblank: without this the wake
+ * gesture would be disarmed during that time. 0 arms the gesture now if it
+ * is enabled; 1 leaves the gesture mode if the display is already on,
+ * otherwise the next unblank does it.
+ */
+static ssize_t synaptics_rmi4_interactive_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	unsigned int input;
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+
+	if (kstrtouint(buf, 10, &input))
+		return -EINVAL;
+
+	mutex_lock(&rmi4_data->pm_mutex);
+	rmi4_data->interactive = input > 0;
+	if (!rmi4_data->interactive) {
+		if (rmi4_data->wake_gesture && rmi4_data->f12_wakeup_gesture &&
+				!rmi4_data->suspended)
+			synaptics_rmi4_suspend(&rmi4_data->input_dev->dev);
+	} else if (rmi4_data->suspended && rmi4_data->fb_unblanked) {
+		synaptics_rmi4_resume(&rmi4_data->input_dev->dev);
+	}
+	mutex_unlock(&rmi4_data->pm_mutex);
+
+	return count;
 }
 
 static ssize_t synaptics_rmi4_wake_stats_show(struct device *dev,
@@ -4171,6 +4220,8 @@ static int synaptics_rmi4_probe(struct i2c_client *client,
 	rmi4_data->dtap_time = F12_DTAP_MAX_TAP_TIME;
 	rmi4_data->dtap_dist = F12_DTAP_MAX_TAP_DIST;
 	rmi4_data->wake_report = true;
+	rmi4_data->interactive = true;
+	rmi4_data->fb_unblanked = true;
 	mutex_init(&rmi4_data->pm_mutex);
 	init_waitqueue_head(&rmi4_data->pm_wait);
 
@@ -4671,7 +4722,19 @@ static int fb_notifier_callback(struct notifier_block *self,
 			 * device is not interactive, so suspend touch and
 			 * arm the double tap wake gesture as when off.
 			 */
-			if (*blank == FB_BLANK_UNBLANK)
+			rmi4_data->fb_unblanked = *blank == FB_BLANK_UNBLANK;
+			/*
+			 * Not interactive (power HAL) with the gesture armed:
+			 * the display comes on for the doze transition, keep
+			 * the gesture until Android is interactive again.
+			 */
+			if (*blank == FB_BLANK_UNBLANK &&
+					!rmi4_data->interactive &&
+					rmi4_data->wake_gesture_armed)
+				dev_info(&rmi4_data->i2c_client->dev,
+					"%s: display on while not interactive, gesture kept\n",
+					__func__);
+			else if (*blank == FB_BLANK_UNBLANK)
 				synaptics_rmi4_resume(
 					&(rmi4_data->input_dev->dev));
 			else if (*blank == FB_BLANK_POWERDOWN ||

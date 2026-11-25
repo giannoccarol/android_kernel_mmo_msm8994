@@ -283,6 +283,14 @@ struct synaptics_rmi4_data {
 	unsigned int wake_irqs;
 	unsigned int wake_other;
 	unsigned int wake_resets;
+	/*
+	 * interactive: written by the power HAL (INTERACTIVE mode). While it
+	 * is 0 the wake gesture stays armed even if the display is on, as in
+	 * the doze transition of the always-on display. fb_unblanked: last
+	 * display state seen by the fb notifier.
+	 */
+	bool interactive;
+	bool fb_unblanked;
 	struct mutex pm_mutex;
 	wait_queue_head_t pm_wait;
 	wait_queue_head_t wait;
