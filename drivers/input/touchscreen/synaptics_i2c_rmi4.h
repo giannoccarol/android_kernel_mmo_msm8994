@@ -264,6 +264,25 @@ struct synaptics_rmi4_data {
 	bool irq_wake_enabled;
 	bool pm_suspended;
 	unsigned int wake_gesture_count;
+	/*
+	 * Wake gesture tuning and counters. dtap_time/dtap_dist go to F12
+	 * CTRL18 (0: firmware value), wake_nosleep keeps the controller out
+	 * of doze while armed, doze_tune[] replaces the F01 doze interval,
+	 * wakeup threshold and holdoff while armed (0: firmware value).
+	 */
+	unsigned char dtap_time;
+	unsigned char dtap_dist;
+	bool wake_nosleep;
+	bool wake_report;
+	bool f01_doze_probed;
+	bool doze_saved;
+	unsigned short f01_doze_addr[3];
+	unsigned char doze_tune[3];
+	unsigned char doze_fw[3];
+	unsigned int wake_arms;
+	unsigned int wake_irqs;
+	unsigned int wake_other;
+	unsigned int wake_resets;
 	struct mutex pm_mutex;
 	wait_queue_head_t pm_wait;
 	wait_queue_head_t wait;
